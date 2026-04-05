@@ -1,0 +1,706 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
+  RefreshControl,
+  Modal,
+  SafeAreaView,
+  TextInput,
+
+} from 'react-native';
+import auth from '@react-native-firebase/auth';
+import firestore from '@react-native-firebase/firestore';
+import DashboardHeader from '../components/DashboardHeader';
+
+function GhostChatModal({ targetUserId, targetUserName, onClose }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    const unsub = firestore().collection('chat_sessions').doc(targetUserId)
+      .collection('messages')
+      .orderBy('createdAt', 'asc')
+      .onSnapshot(snap => {
+        if (!snap) return;
+        setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 150);
+      });
+    return () => unsub();
+  }, [targetUserId]);
+
+  const sendMessage = async () => {
+    if (!input.trim()) return;
+    await firestore().collection('chat_sessions').doc(targetUserId).collection('messages').add({
+      role: 'assistant', // Ghosting as the bot!
+      authorId: auth().currentUser?.uid || 'guardian',
+      content: input.trim(),
+      createdAt: firestore.FieldValue.serverTimestamp(),
+    });
+    
+    await firestore().collection('chat_sessions').doc(targetUserId).set({
+      lastMessageAt: firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    
+    setInput('');
+  };
+
+  const escalateToProf = async () => {
+    Alert.alert('Escalate', 'Pass this chat to a professional?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Yes, Escalate', style: 'destructive', onPress: async () => {
+          await firestore().collection('chat_sessions').doc(targetUserId).set({
+            status: 'pending_professional',
+            botSuspended: true,
+            escalatedProfAt: firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          Alert.alert('Escalated', 'Professionals have been notified.');
+          onClose();
+        }
+      }
+    ]);
+  };
+
+  return (
+    <Modal visible={true} animationType="slide">
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#f8fafc' }}>
+        <View style={styles.modalHeader}>
+          <TouchableOpacity onPress={onClose} style={{ padding: 10 }}>
+            <Text style={styles.closeText}>Close</Text>
+          </TouchableOpacity>
+          <Text style={styles.modalTitle}>Ghost Chat: {targetUserName}</Text>
+          <TouchableOpacity onPress={escalateToProf} style={{ padding: 10 }}>
+            <Text style={styles.escalateText}>Escalate</Text>
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView ref={scrollRef} style={styles.chatScroll} contentContainerStyle={{ padding: 16 }}>
+          {messages.map(msg => (
+            <View key={msg.id} style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.botBubble]}>
+              <Text style={[styles.bubbleText, msg.role === 'user' ? styles.userText : styles.botText]}>
+                {msg.content}
+              </Text>
+            </View>
+          ))}
+        </ScrollView>
+
+        <View style={styles.inputRow}>
+          <TextInput
+            style={styles.chatInput}
+            value={input}
+            onChangeText={setInput}
+            placeholder="Type as CalmBot..."
+            placeholderTextColor="#94a3b8"
+            multiline
+          />
+          <TouchableOpacity style={styles.sendBtn} onPress={sendMessage}>
+            <Text style={styles.sendBtnText}>↑</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+export default function GuardianDashboard({ navigation }) {
+  const [loading, setLoading] = useState(true);
+  const [linkedUsers, setLinkedUsers] = useState([]);
+  const [alerts, setAlerts] = useState([]);
+  const [guardianName, setGuardianName] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const [chatSessions, setChatSessions] = useState({});
+  const [activeChatUserId, setActiveChatUserId] = useState(null);
+  const [activeChatUserName, setActiveChatUserName] = useState('');
+  const listenerRef = useRef(null);
+  const chatSessionsListenerRefs = useRef([]);
+
+  useEffect(() => {
+    loadProfile();
+    loadLinkedUsers();
+    return () => {
+      if (listenerRef.current) listenerRef.current();
+      chatSessionsListenerRefs.current.forEach(unsub => unsub());
+    };
+  }, []);
+
+  const loadProfile = async () => {
+    try {
+      const uid = auth().currentUser?.uid;
+      if (!uid) return;
+      const doc = await firestore().collection('users').doc(uid).get();
+      if (doc.exists) setGuardianName(doc.data()?.name || 'Guardian');
+    } catch (e) {
+      console.log('Profile error:', e);
+    }
+  };
+
+  /** Alerts where this guardian is listed — scales past Firestore `in` limit of 10. */
+  const startAlertsListener = (guardianUid) => {
+    if (listenerRef.current) listenerRef.current();
+
+    const q = firestore()
+      .collection('alerts')
+      .where('guardianIds', 'array-contains', guardianUid)
+      .orderBy('timestamp', 'desc')
+      .limit(50);
+
+    listenerRef.current = q.onSnapshot(
+      (snap) => {
+        const alertList = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setAlerts(alertList);
+      },
+      (error) => console.log('Alerts listener error:', error)
+    );
+  };
+
+  const loadLinkedUsers = async () => {
+    try {
+      const uid = auth().currentUser?.uid;
+      if (!uid) return;
+
+      const linksSnap = await firestore()
+        .collection('guardian_links')
+        .where('guardianId', '==', uid)
+        .where('status', '==', 'active')
+        .get();
+
+      const users = [];
+      for (const d of linksSnap.docs) {
+        const data = d.data();
+        const userDoc = await firestore().collection('users').doc(data.userId).get();
+        if (userDoc.exists) {
+          users.push({
+            id: d.id,
+            userId: data.userId,
+            name: userDoc.data()?.name || 'Unknown',
+            email: userDoc.data()?.email || '',
+            linkedAt: data.linkedAt,
+          });
+        }
+      }
+
+      setLinkedUsers(users);
+      startAlertsListener(uid);
+
+      // Listen to their chat sessions
+      chatSessionsListenerRefs.current.forEach(u => u());
+      chatSessionsListenerRefs.current = [];
+      
+      users.forEach(u => {
+        const unsub = firestore().collection('chat_sessions').doc(u.userId).onSnapshot(doc => {
+          if (doc.exists) {
+            setChatSessions(prev => ({ ...prev, [u.userId]: doc.data() }));
+          }
+        });
+        chatSessionsListenerRefs.current.push(unsub);
+      });
+
+    } catch (e) {
+      console.log('Linked users error:', e);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  const markAlertRead = async (alertId) => {
+    try {
+      await firestore().collection('alerts').doc(alertId).update({ read: true });
+      setAlerts((prev) => prev.map((a) => (a.id === alertId ? { ...a, read: true } : a)));
+    } catch (e) {
+      console.log('Mark read error:', e);
+    }
+  };
+
+  const markAllRead = async () => {
+    try {
+      const unread = alerts.filter((a) => !a.read);
+      const batch = firestore().batch();
+      unread.forEach((a) => {
+        batch.update(firestore().collection('alerts').doc(a.id), { read: true });
+      });
+      await batch.commit();
+      setAlerts((prev) => prev.map((a) => ({ ...a, read: true })));
+    } catch (e) {
+      console.log('Mark all read error:', e);
+    }
+  };
+
+  const formatTime = (timestamp) => {
+    if (!timestamp) return '';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHrs = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHrs < 24) return `${diffHrs}h ago`;
+    if (diffDays === 1) return 'Yesterday';
+    return `${diffDays} days ago`;
+  };
+
+  const getAlertConfig = (type) => {
+    switch (type) {
+      case 'HIGH_RISK':
+        return {
+          emoji: '🔴',
+          label: 'High Risk Detected',
+          color: '#ef4444',
+          bg: '#fef2f2',
+          border: '#fecaca',
+        };
+      case 'MODERATE_RISK':
+        return {
+          emoji: '🟡',
+          label: 'Moderate Risk Detected',
+          color: '#d97706',
+          bg: '#fffbeb',
+          border: '#fde68a',
+        };
+      case 'USER_REQUESTED_HELP':
+        return {
+          emoji: '🆘',
+          label: 'User Asked for Help',
+          color: '#dc2626',
+          bg: '#fff1f2',
+          border: '#fecdd3',
+        };
+      default:
+        return {
+          emoji: '📋',
+          label: 'Pattern Change',
+          color: '#6366f1',
+          bg: '#eef2ff',
+          border: '#c7d2fe',
+        };
+    }
+  };
+
+  const openAlertDetail = (alert) => {
+    const config = getAlertConfig(alert.type);
+    const devLines =
+      alert.deviations && alert.deviations.length > 0
+        ? `\n\n${alert.deviations.slice(0, 8).map((d) => `• ${d}`).join('\n')}`
+        : '';
+    const body = `${alert.message || ''}${devLines}`.trim() || 'No extra details.';
+
+    Alert.alert(config.label, body, [
+      {
+        text: 'Mark as read',
+        onPress: () => markAlertRead(alert.id),
+      },
+      { text: 'Close', style: 'cancel' },
+    ]);
+  };
+
+  const unreadCount = alerts.filter((a) => !a.read).length;
+
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color="#6366f1" />
+        <Text style={styles.loadingText}>Loading…</Text>
+      </View>
+    );
+  }
+
+  return (
+    <>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => {
+            setRefreshing(true);
+            loadLinkedUsers();
+          }}
+          colors={['#6366f1']}
+        />
+      }>
+      <DashboardHeader
+        title={`Hello, ${guardianName} 🛡️`}
+        subtitle="Guardian dashboard · alerts from linked users"
+        onOpenSettings={() => navigation.navigate('Settings')}
+      />
+
+      <View style={styles.summaryRow}>
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryNum}>{linkedUsers.length}</Text>
+          <Text style={styles.summaryLabel}>
+            Linked{'\n'}Users
+          </Text>
+        </View>
+        <View style={[styles.summaryCard, unreadCount > 0 && styles.summaryCardRed]}>
+          <Text style={[styles.summaryNum, unreadCount > 0 && { color: '#ef4444' }]}>
+            {unreadCount}
+          </Text>
+          <Text style={[styles.summaryLabel, unreadCount > 0 && { color: '#ef4444' }]}>
+            Unread{'\n'}Alerts
+          </Text>
+        </View>
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryNum}>{alerts.length}</Text>
+          <Text style={styles.summaryLabel}>
+            Total{'\n'}Alerts
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>People You&apos;re Watching Over</Text>
+
+        {linkedUsers.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyEmoji}>👥</Text>
+            <Text style={styles.emptyTitle}>No linked users yet</Text>
+            <Text style={styles.emptyDesc}>
+              Ask the person you want to monitor to add you as their guardian from their settings.
+              They&apos;ll share a pairing code with you.
+            </Text>
+          </View>
+        ) : (
+          linkedUsers.map((user) => {
+            const userAlerts = alerts.filter((a) => a.userId === user.userId);
+            const userUnread = userAlerts.filter((a) => !a.read).length;
+            const lastAlert = userAlerts[0];
+            const lastRisk = lastAlert?.riskLevel || 'NORMAL';
+            const session = chatSessions[user.userId];
+
+            return (
+              <View key={user.id} style={styles.userCard}>
+                <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                  <View style={styles.userAvatarWrap}>
+                    <Text style={styles.userAvatarText}>{user.name.charAt(0).toUpperCase()}</Text>
+                  </View>
+                  <View style={styles.userInfo}>
+                    <Text style={styles.userName}>{user.name}</Text>
+                    <Text style={styles.userEmail}>{user.email}</Text>
+                    <Text style={styles.userAlertCount}>
+                      {userAlerts.length} alert{userAlerts.length !== 1 ? 's' : ''} total
+                      {userUnread > 0 ? ` · ${userUnread} unread` : ''}
+                    </Text>
+                  </View>
+                  <View style={styles.userRisk}>
+                    <Text style={styles.userRiskEmoji}>
+                      {lastRisk === 'HIGH' ? '🔴' : lastRisk === 'MODERATE' ? '🟡' : '🟢'}
+                    </Text>
+                    <Text style={[styles.userRiskText, {color: lastRisk === 'HIGH' ? '#ef4444' : lastRisk === 'MODERATE' ? '#d97706' : '#22c55e'}]}>
+                      {lastRisk}
+                    </Text>
+                  </View>
+                </View>
+                
+                {(session?.status === 'guardian_active' || session?.status === 'guardian_notified') && (
+                  <TouchableOpacity
+                    style={styles.interveneBtn}
+                    onPress={async () => {
+                      setActiveChatUserId(user.userId);
+                      setActiveChatUserName(user.name);
+                      
+                      // Claim the session and silence CalmBot so Guardian can ghost
+                      await firestore().collection('chat_sessions').doc(user.userId).set({
+                        status: 'guardian_active',
+                        botSuspended: true
+                      }, { merge: true });
+                    }}>
+                    <Text style={styles.interveneBtnText}>🚨 Intervene / Take Over Chat</Text>
+                  </TouchableOpacity>
+                )}
+                {session?.status === 'pending_professional' && (
+                  <View style={styles.profPendingWrap}>
+                    <Text style={styles.profPendingText}>⏳ Escalated to Professional</Text>
+                  </View>
+                )}
+              </View>
+            );
+          })
+        )}
+      </View>
+
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Alert Feed</Text>
+          {unreadCount > 0 && (
+            <TouchableOpacity onPress={markAllRead}>
+              <Text style={styles.markAllRead}>Mark all read</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {alerts.length === 0 ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyEmoji}>✅</Text>
+            <Text style={styles.emptyTitle}>No alerts yet</Text>
+            <Text style={styles.emptyDesc}>
+              Alerts appear here when MindGuard flags MODERATE/HIGH risk for a linked user, or when they
+              request help from CalmBot. You must be listed on their guardian link.
+            </Text>
+          </View>
+        ) : (
+          alerts.map((alert) => {
+            const config = getAlertConfig(alert.type);
+            return (
+              <TouchableOpacity
+                key={alert.id}
+                style={[
+                  styles.alertCard,
+                  { backgroundColor: config.bg, borderColor: config.border },
+                  !alert.read && styles.alertUnread,
+                ]}
+                onPress={() => openAlertDetail(alert)}
+                activeOpacity={0.85}>
+                <View style={styles.alertIconWrap}>
+                  <Text style={styles.alertIcon}>{config.emoji}</Text>
+                </View>
+                <View style={styles.alertBody}>
+                  <View style={styles.alertTopRow}>
+                    <Text style={[styles.alertType, { color: config.color }]}>{config.label}</Text>
+                    {!alert.read && <View style={styles.unreadDot} />}
+                  </View>
+                  <Text style={styles.alertUser}>👤 {alert.userName || 'Unknown user'}</Text>
+                  {alert.message ? (
+                    <Text style={styles.alertMsg} numberOfLines={2}>
+                      {alert.message}
+                    </Text>
+                  ) : null}
+                  {alert.deviations && alert.deviations.length > 0 && (
+                    <Text style={styles.alertDeviation} numberOfLines={1}>
+                      • {alert.deviations[0]}
+                    </Text>
+                  )}
+                  <View style={styles.alertFooter}>
+                    <Text style={styles.alertTime}>{formatTime(alert.timestamp)}</Text>
+                    {!alert.read ? <Text style={styles.tapToRead}>Tap for details</Text> : null}
+                  </View>
+                </View>
+              </TouchableOpacity>
+            );
+          })
+        )}
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>How This Works</Text>
+        <View style={styles.infoCard}>
+          {[
+            {
+              emoji: '📱',
+              text: "MindGuard monitors the linked user's digital behaviour on their device — screen time, social apps, location patterns, night usage.",
+            },
+            {
+              emoji: '🧠',
+              text: 'An on-device ML model flags when today looks unusual vs their recent baseline (weekday vs weekend aware).',
+            },
+            {
+              emoji: '🔔',
+              text: 'MODERATE or HIGH risk creates an alert here in real time (once per level per day).',
+            },
+            {
+              emoji: '🆘',
+              text: 'If they tap for help in CalmBot, you get an emergency alert immediately.',
+            },
+            {
+              emoji: '🔒',
+              text: 'Raw usage data stays on their phone — only summaries and risk level are stored in alerts.',
+            },
+          ].map((item, i) => (
+            <View key={i} style={[styles.infoRow, i < 4 && styles.infoRowBorder]}>
+              <Text style={styles.infoEmoji}>{item.emoji}</Text>
+              <Text style={styles.infoText}>{item.text}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+
+      <View style={{ height: 32 }} />
+    </ScrollView>
+    {activeChatUserId && (
+      <GhostChatModal
+        targetUserId={activeChatUserId}
+        targetUserName={activeChatUserName}
+        onClose={() => setActiveChatUserId(null)}
+      />
+    )}
+    </>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f8fafc' },
+  scrollContent: { paddingTop: 8 },
+  centered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+  },
+  loadingText: { marginTop: 16, color: '#64748b', fontSize: 15 },
+  summaryRow: { flexDirection: 'row', padding: 16, gap: 10 },
+  summaryCard: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 14,
+    alignItems: 'center',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+  },
+  summaryCardRed: { backgroundColor: '#fef2f2', borderWidth: 1.5, borderColor: '#fecaca' },
+  summaryNum: { fontSize: 28, fontWeight: 'bold', color: '#1e293b' },
+  summaryLabel: { fontSize: 11, color: '#64748b', marginTop: 4, textAlign: 'center' },
+  section: { paddingHorizontal: 16, marginBottom: 8 },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  sectionTitle: { fontSize: 17, fontWeight: 'bold', color: '#1e293b', marginBottom: 12 },
+  markAllRead: { fontSize: 13, color: '#6366f1', fontWeight: '600' },
+  emptyCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 24,
+    alignItems: 'center',
+    marginBottom: 8,
+    elevation: 1,
+  },
+  emptyEmoji: { fontSize: 40, marginBottom: 12 },
+  emptyTitle: { fontSize: 16, fontWeight: 'bold', color: '#1e293b', marginBottom: 8 },
+  emptyDesc: { fontSize: 13, color: '#64748b', textAlign: 'center', lineHeight: 20 },
+  userCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+  },
+  userAvatarWrap: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#eef2ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  userAvatarText: { fontSize: 20, fontWeight: 'bold', color: '#6366f1' },
+  userInfo: { flex: 1 },
+  userName: { fontSize: 15, fontWeight: 'bold', color: '#1e293b' },
+  userEmail: { fontSize: 12, color: '#64748b', marginTop: 2 },
+  userAlertCount: { fontSize: 11, color: '#94a3b8', marginTop: 2 },
+  userRisk: { alignItems: 'center' },
+  userRiskEmoji: { fontSize: 18 },
+  userRiskText: { fontSize: 11, fontWeight: '700', marginTop: 2 },
+  alertCard: {
+    borderRadius: 14,
+    padding: 14,
+    flexDirection: 'row',
+    marginBottom: 10,
+    borderWidth: 1,
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+  },
+  alertUnread: { borderLeftWidth: 4, borderLeftColor: '#6366f1' },
+  alertIconWrap: { marginRight: 12, justifyContent: 'flex-start' },
+  alertIcon: { fontSize: 26 },
+  alertBody: { flex: 1 },
+  alertTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  alertType: { fontSize: 13, fontWeight: 'bold', flex: 1 },
+  unreadDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#6366f1',
+    marginLeft: 8,
+  },
+  alertUser: { fontSize: 13, color: '#475569', marginBottom: 3 },
+  alertMsg: { fontSize: 13, color: '#64748b', lineHeight: 18, marginBottom: 3 },
+  alertDeviation: { fontSize: 12, color: '#94a3b8', marginBottom: 4, fontStyle: 'italic' },
+  alertFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  alertTime: { fontSize: 11, color: '#94a3b8' },
+  tapToRead: { fontSize: 11, color: '#6366f1' },
+  infoCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    elevation: 1,
+    marginBottom: 8,
+  },
+  infoRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 12, gap: 12 },
+  infoRowBorder: { borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  infoEmoji: { fontSize: 18, marginTop: 1 },
+  infoText: { flex: 1, fontSize: 13, color: '#475569', lineHeight: 20 },
+  interveneBtn: {
+    backgroundColor: '#fee2e2',
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#fca5a5'
+  },
+  interveneBtnText: { color: '#dc2626', fontWeight: 'bold' },
+  profPendingWrap: {
+    backgroundColor: '#fffbeb',
+    padding: 12,
+    borderRadius: 10,
+    marginTop: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#fde68a'
+  },
+  profPendingText: { color: '#d97706', fontWeight: 'bold' },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    backgroundColor: '#fff',
+    paddingTop: 10,
+    paddingBottom: 10,
+    elevation: 2,
+  },
+  closeText: { color: '#64748b', fontWeight: '600', fontSize: 16 },
+  escalateText: { color: '#ef4444', fontWeight: 'bold', fontSize: 16 },
+  modalTitle: { fontSize: 16, fontWeight: 'bold', color: '#1e293b' },
+  chatScroll: { flex: 1, backgroundColor: '#f8fafc' },
+  bubble: { maxWidth: '80%', padding: 12, borderRadius: 18, marginBottom: 10 },
+  botBubble: { backgroundColor: '#fff', alignSelf: 'flex-start', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#e2e8f0' },
+  userBubble: { backgroundColor: '#6366f1', alignSelf: 'flex-end', borderBottomRightRadius: 4 },
+  bubbleText: { fontSize: 15, lineHeight: 22 },
+  botText: { color: '#1e293b' },
+  userText: { color: '#fff' },
+  inputRow: { flexDirection: 'row', alignItems: 'flex-end', padding: 12, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#e2e8f0', gap: 10 },
+  chatInput: { flex: 1, backgroundColor: '#f1f5f9', borderRadius: 22, paddingHorizontal: 16, paddingVertical: 10, fontSize: 15, maxHeight: 100 },
+  sendBtn: { backgroundColor: '#6366f1', width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
+  sendBtnText: { color: '#fff', fontSize: 20, fontWeight: 'bold' }
+});

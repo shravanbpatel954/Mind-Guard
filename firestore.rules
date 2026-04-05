@@ -1,0 +1,15 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Dev / demo window — replace with auth-scoped rules before production.
+    match /alerts/{alertId} {
+      allow read, write: if request.time < timestamp.date(2026, 4, 14);
+    }
+    match /guardian_links/{linkId} {
+      allow read, write: if request.time < timestamp.date(2026, 4, 14);
+    }
+    match /users/{userId} {
+      allow read, write: if request.time < timestamp.date(2026, 4, 14);
+    }
+  }
+}

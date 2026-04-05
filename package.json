@@ -7,13 +7,33 @@
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start",
-    "test": "jest"
+    "test": "jest",
+    "clean:android": "node scripts/clean-android.js",
+    "rebuild:android": "npm run clean:android && react-native run-android",
+    "setup:android": "npm install && npm run clean:android && react-native run-android"
   },
   "dependencies": {
+    "@brighthustle/react-native-usage-stats-manager": "^0.1.5",
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "@react-native-documents/picker": "^12.0.1",
+    "@react-native-firebase/app": "^24.0.0",
+    "@react-native-firebase/auth": "^24.0.0",
+    "@react-native-firebase/firestore": "^24.0.0",
+    "@react-native-firebase/storage": "^24.0.0",
+    "@react-native-google-signin/google-signin": "^16.1.2",
+    "@react-navigation/elements": "^2.9.10",
+    "@react-navigation/native": "^7.1.33",
+    "@react-navigation/stack": "^7.8.5",
+    "qrcode": "^1.5.4",
     "react": "19.2.3",
     "react-native": "0.84.1",
-    "@react-native/new-app-screen": "0.84.1",
-    "react-native-safe-area-context": "^5.5.2"
+    "react-native-gesture-handler": "^2.30.0",
+    "react-native-get-location": "^6.0.1",
+    "react-native-permissions": "^5.5.1",
+    "react-native-qrcode-scanner": "^1.5.5",
+    "react-native-safe-area-context": "^5.7.0",
+    "react-native-screens": "^4.24.0",
+    "react-native-vision-camera": "^4.7.3"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
