@@ -20,6 +20,7 @@ import {
 } from '../monitoring/LocationMonitor';
 import { analyzeWithML } from '../ml/MLAnalyzer';
 import { sendRiskAlert } from '../alerts/AlertManager';
+import { startLiveLocationSharing } from '../monitoring/LiveLocationSharing';
 import { calculateBaseline } from '../analysis/BehaviorAnalyzer';
 import {
   ensureInstallConsistency,
@@ -757,7 +758,10 @@ const UserDashboard = ({ navigation }) => {
 
     if (result.riskLevel !== 'NORMAL') {
       try {
-        await sendRiskAlert(result.riskLevel, result.riskScore, result.deviations);
+        const alertInfo = await sendRiskAlert(result.riskLevel, result.riskScore, result.deviations);
+        if (alertInfo?.alertId) {
+          startLiveLocationSharing(alertInfo.alertId, alertInfo.expiresAtMs);
+        }
       } catch (e) {
         console.log('sendRiskAlert error:', e);
       }

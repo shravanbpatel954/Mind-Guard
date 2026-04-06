@@ -7,6 +7,7 @@ import {
 import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
 import { sendHelpRequestAlert } from '../alerts/AlertManager';
+import { startLiveLocationSharing } from '../monitoring/LiveLocationSharing';
 
 // ─── RESPONSE ENGINE ─────────────────────────────────────────
 const RESPONSES = {
@@ -126,12 +127,15 @@ export default function ChatScreen({ navigation, route }) {
     const sessionRef = firestore().collection('chat_sessions').doc(uid);
     sessionRef.set({
       userId: uid,
+      // If a guardian previously took over chat, ensure CalmBot can reply again
+      // when the user opens their own chat.
+      botSuspended: false,
       updatedAt: firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
 
-    const unsubSession = sessionRef.onSnapshot(doc => {
-      if (doc.exists) {
-        setBotSuspended(doc.data().botSuspended || false);
+    const unsubSession = sessionRef.onSnapshot((snapDoc) => {
+      if (snapDoc.exists) {
+        setBotSuspended(snapDoc.data().botSuspended || false);
       }
     });
 
@@ -185,7 +189,13 @@ export default function ChatScreen({ navigation, route }) {
       botSuspended: false, // Ensure bot continues to interact with user
       escalatedAt: firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
-    sendHelpRequestAlert().catch(e => console.log('Guardian alert failed', e));
+    sendHelpRequestAlert()
+      .then(info => {
+        if (info?.alertId) {
+          startLiveLocationSharing(info.alertId, info.expiresAtMs);
+        }
+      })
+      .catch(e => console.log('Guardian alert failed', e));
   };
 
   const sendMessage = async (text) => {
@@ -253,7 +263,10 @@ export default function ChatScreen({ navigation, route }) {
         Alert.alert('Error', 'Not logged in.');
         return;
       }
-      await sendHelpRequestAlert();
+      const info = await sendHelpRequestAlert();
+      if (info?.alertId) {
+        startLiveLocationSharing(info.alertId, info.expiresAtMs);
+      }
       Alert.alert(
         '✅ Guardian Notified',
         'Your guardian has been notified that you reached out for support.'

@@ -50,7 +50,10 @@ export const sendRiskAlert = async (riskLevel, riskScore, deviations) => {
 
     const guardianIds = linksSnap.docs.map((d) => d.data().guardianId).filter(Boolean);
 
-    await firestore().collection('alerts').add({
+    const createdAt = new Date();
+    const expiresAtMs = createdAt.getTime() + 12 * 60 * 60 * 1000;
+
+    const docRef = await firestore().collection('alerts').add({
       userId: uid,
       userName,
       guardianIds,
@@ -62,11 +65,15 @@ export const sendRiskAlert = async (riskLevel, riskScore, deviations) => {
       message: buildAlertMessage(riskLevel, deviations),
       timestamp: firestore.FieldValue.serverTimestamp(),
       read: false,
+      liveLocationActive: false,
+      liveLocationExpiresAt: new Date(expiresAtMs),
     });
 
     console.log(`Alert sent: ${typeKey}`);
+    return { alertId: docRef.id, expiresAtMs };
   } catch (error) {
     console.log('Alert send error:', error);
+    return null;
   }
 };
 
@@ -87,7 +94,10 @@ export const sendHelpRequestAlert = async () => {
 
     const guardianIds = linksSnap.docs.map((d) => d.data().guardianId).filter(Boolean);
 
-    await firestore().collection('alerts').add({
+    const createdAt = new Date();
+    const expiresAtMs = createdAt.getTime() + 12 * 60 * 60 * 1000;
+
+    const docRef = await firestore().collection('alerts').add({
       userId: uid,
       userName,
       guardianIds,
@@ -102,6 +112,7 @@ export const sendHelpRequestAlert = async () => {
     });
 
     console.log('Help request alert sent');
+    return { alertId: docRef.id, expiresAtMs };
   } catch (error) {
     console.log('Help request alert error:', error);
     throw error;

@@ -16,8 +16,12 @@ const toRemove = [
 
 for (const dir of toRemove) {
   if (fs.existsSync(dir)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-    console.log('[clean-android] removed', path.relative(process.cwd(), dir));
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 6, retryDelay: 250 });
+      console.log('[clean-android] removed', path.relative(process.cwd(), dir));
+    } catch (e) {
+      console.log('[clean-android] could not remove (locked):', path.relative(process.cwd(), dir));
+    }
   }
 }
 
