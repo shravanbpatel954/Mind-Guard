@@ -8,95 +8,12 @@ import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
 import { sendHelpRequestAlert } from '../alerts/AlertManager';
 import { startLiveLocationSharing } from '../monitoring/LiveLocationSharing';
-
-// ─── RESPONSE ENGINE ─────────────────────────────────────────
-const RESPONSES = {
-  okay: [
-    "That's good to hear! 😊 Sometimes our patterns change for totally normal reasons — a busy day, staying up late, or just an off day.\n\nIs there anything on your mind lately?",
-    "Glad you're doing okay! 🌿 Even on good days it helps to check in with yourself.\n\nWhat's been keeping you busy today?",
-  ],
-  notgreat: [
-    "Thank you for being honest with me. 💙 It takes courage to say that.\n\nWould you like to try a quick breathing exercise? It only takes 2 minutes and genuinely helps.",
-    "I hear you. Not every day feels good and that's completely okay. 🌧️\n\nCan you tell me a little more about what's been going on?",
-  ],
-  help: [
-    "I'm really glad you reached out. 💙 You don't have to go through this alone.\n\nI've shown the helpline below — please consider calling them. They're kind, understanding people.",
-    "Thank you for trusting me with this. 🤝 That matters so much.\n\nPlease use the helpline below — talking to someone really helps. I can also notify your guardian if you'd like.",
-  ],
-  breathing: [
-    "Let's do the 4-7-8 breathing technique together 🌬️\n\n→ Breathe IN for 4 seconds\n→ HOLD for 7 seconds\n→ Breathe OUT slowly for 8 seconds\n\nRepeat 3 times. How do you feel after?",
-  ],
-  walk: [
-    "A 10-minute walk outside can genuinely shift your mood. 🚶\n\nNo destination needed — just fresh air and movement. Even stepping outside your door counts.",
-  ],
-  water: [
-    "Something small but real — drink a full glass of water right now. 💧\n\nDehydration quietly affects mood more than most people realize. Then tell me how you're feeling.",
-  ],
-  friend: [
-    "Is there someone you trust — a friend, sibling, or family member — you could call or message right now? 📱\n\nSometimes just hearing a familiar voice helps more than anything else.",
-  ],
-  better: [
-    "I'm really glad to hear that. 🌟 Small steps matter.\n\nKeep being kind to yourself today. You can always come back and talk whenever you need.",
-    "That's wonderful. 💚 You showed up for yourself today and that counts.\n\nTake it one hour at a time. I'm here whenever you need.",
-  ],
-  hindi: [
-    "Haan, main thoda Hindi/Hinglish samajh aur bol sakta hoon! Aap mujhse jaise chahein baat kar sakte hain. Aap kaisa feel kar rahe hain abhi?",
-    "Ji haan! 💙 Main Hinglish mein bhi baat kar sakta hoon. Aaj aapka din kaisa ja raha hai?"
-  ],
-  hinglish_distress: [
-    "Main samajh sakta hoon ki yeh waqt aasan nahi hai. 💙 Aap akele nahi hain. Kya aap mujhe aur batana chahenge?",
-    "Kabhi kabhi sab kuch bahut bhaari lagta hai. 🌧️ Ek lamba saans lijiye. Agar aapko theek lage, toh kya aap kisi dost ko call karna chahenge?"
-  ],
-  default: [
-    "I'm here with you. 💙 Sometimes just talking helps.\n\nWhat's on your mind?",
-    "Thank you for sharing that with me. 🌿 You're not alone in this.\n\nWould you like to try a breathing exercise or just keep talking?",
-    "That makes sense. Life can feel heavy sometimes. 🌧️\n\nOne small thing — drink a glass of water and take 3 slow breaths. Then tell me how you're feeling.",
-    "I hear you. 💙 You reached out today and that matters more than you know.\n\nIs there someone in your life you trust that you could call right now?",
-    "You don't have to have everything figured out. 🌿\n\nJust being here and checking in with yourself is enough for now. What would feel helpful to you right now?",
-  ],
-};
-
-const getRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
-
-const getResponse = (text) => {
-  const t = text.toLowerCase().trim();
-
-  // Language questions
-  if (t.includes('hindi') || t.includes('urdu') || t.includes('hinglish') || t.includes('bata skte') || t.includes('bol skte'))
-    return getRandom(RESPONSES.hindi);
-
-  // Flexible greetings
-  if (t.match(/^(hi|hey|hello|hii+|namaste|kaise ho)(\s|$)/i) || t.includes('hello') || t.includes('hii'))
-    return "Hi there! I'm here for you. 😊 How are you feeling today? (Main yahan aapke liye hoon, aaj aap kaisa feel kar rahe hain?)";
-
-  // Distress matches
-  if (t.includes("i'm okay") || t.includes('im okay') || t === 'okay' || t === 'fine' || t.includes('doing good') || t.includes('doing well') || t === "i'm okay")
-    return getRandom(RESPONSES.okay);
-  
-  if (t.includes('not feeling') || t.includes('not great') || t.includes('not good') || t.includes('feeling bad') || t.includes('sad') || t.includes('tired') || t.includes('low') || t.includes('down') || t.includes('depress') || t.includes('lonely') || t.includes('hopeless') || t.includes('overwhelm') || t.includes('stress') || t.includes('cry') || t.includes('anxious') || t.includes('empty'))
-    return getRandom(RESPONSES.notgreat);
-    
-  if (t.includes('need help') || t.includes('crisis') || t.includes('hurt') || t.includes('suicide') || t.includes('suicidal') || t.includes('end my life') || t.includes('kill'))
-    return getRandom(RESPONSES.help);
-
-  // New Hinglish Distress handler
-  if (t.includes('kuch acha') || t.includes('udas') || t.includes('akelapan') || t.includes('akela') || t.includes('rona') || t.includes('mann nahi') || t.includes('zindagi bekar') || t.includes('thak') || t.includes('bura lag raha') || t.includes('haar gaya') || t.includes('tension') || t.includes('pareshan') || t.includes('dard') || t.includes('dimag kharab') || t.includes('koi nahi'))
-    return getRandom(RESPONSES.hinglish_distress);
-
-  // Coping matching
-  if (t.includes('breath') || t.includes('yes') || t.includes('sure') || t.includes('okay let') || t.includes('try it'))
-    return RESPONSES.breathing[0];
-  if (t.includes('walk') || t.includes('outside') || t.includes('go out'))
-    return RESPONSES.walk[0];
-  if (t.includes('water') || t.includes('drink'))
-    return RESPONSES.water[0];
-  if (t.includes('friend') || t.includes('call someone') || t.includes('talk to'))
-    return RESPONSES.friend[0];
-  if (t.includes('better') || t.includes('helped') || t.includes('thank') || t.includes('thanks') || t.includes('shukriya'))
-    return getRandom(RESPONSES.better);
-
-  return getRandom(RESPONSES.default);
-};
+import {
+  buildCrisisFollowup,
+  buildReply,
+  classify,
+  nextBotState,
+} from '../bot/CalmBotEngine';
 
 // ─── CONSTANTS ────────────────────────────────────────────────
 const QUICK_REPLIES = [
@@ -104,8 +21,6 @@ const QUICK_REPLIES = [
   { id: 'notgreat', label: "Not feeling great",  emoji: '😔' },
   { id: 'help',     label: "I need help",        emoji: '🆘' },
 ];
-
-const HELPLINE = { name: 'iCall', number: '9152987821' };
 
 // ─── COMPONENT ───────────────────────────────────────────────
 export default function ChatScreen({ navigation, route }) {
@@ -117,8 +32,8 @@ export default function ChatScreen({ navigation, route }) {
   const [input, setInput]                 = useState('');
   const [loading, setLoading]             = useState(false);
   const [showQuickReplies, setShowQuickReplies] = useState(true);
-  const [showHelpline, setShowHelpline]   = useState(false);
   const [botSuspended, setBotSuspended]   = useState(false);
+  const botStateRef = useRef('normal'); // normal | supportive | crisis_check
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -207,51 +122,28 @@ export default function ChatScreen({ navigation, route }) {
 
     await saveMessage('user', text.trim(), uid);
 
-    const t = text.toLowerCase();
-    
-    // Detect crisis language (English & Hinglish)
-    const crisisPhrases = [
-      'need help', 'crisis', 'hurt', 'suicide', 'suicidal', 'end my life', 'kill', 'die',
-      'marne ka mann', 'khatam karna', 'jeene ki iccha nahi', 'jeene ka mann nahi'
-    ];
-    const isCrisis = crisisPhrases.some(phrase => t.includes(phrase));
+    const prevState = botStateRef.current;
+    const classification = classify(text);
+    const nextState = nextBotState(prevState, classification);
+    botStateRef.current = nextState;
 
-    // Detect suspicious/depressive behaviors (English & Hinglish)
-    const suspiciousPhrases = [
-      // English
-      'depression', 'sad', 'lonely', 'hopeless', 'anxious', 'scared', 'worthless',
-      'so tired', 'exhausted', "can't get out of bed", 'no energy', 'empty', 'numb', 
-      'pointless', "what's the point", 'my fault', 'burden', 'useless', 'failure',
-      'hate myself', 'better off alone', 'nobody understands', 'overwhelmed',
-      'crying', 'feel terrible', 'feel awful', 'give up', 'done with everything',
-      'no one cares', 'stressed', 'panic',
-      // Hinglish
-      'kuch acha nhi lg rha', 'kuch acha nahi lag raha', 'udas', 'udaas', 
-      'akela', 'akelapan', 'rona aa raha', 'mann nahi', 'man nahi',
-      'bura lag raha', 'zindagi bekar', 'thak gaya', 'thak gayi', 'haar gaya',
-      'sab bekar', 'koi faida nahi', 'andar se khokhla', 'pareshan', 'tension',
-      'dard', 'ghabarahat', 'koi fikar nahi', 'mera koi nahi',
-      'rona aa rha', 'bahut rona', 'mann udas hai', 'akele rehna hai',
-      'kya farq padta hai', 'koi pyar nahi karta', 'sab chod diya',
-      'kuch samajh nahi aa raha', 'dimag kharab'
-    ];
-    const isSuspicious = suspiciousPhrases.some(phrase => t.includes(phrase));
-
-    const needsEscalation = isSuspicious || isCrisis;
-
-    if (isCrisis) {
-      setShowHelpline(true);
-    }
-
-    if (needsEscalation) {
-      await escalateSession();
-    }
+    const needsEscalation = classification.intent === 'self_harm' || classification.intent === 'help';
+    if (needsEscalation) await escalateSession();
 
     setTimeout(async () => {
       if (botSuspended) {
         setLoading(false);
       } else {
-        const reply = getResponse(text);
+        let reply = buildReply({ text, classification, state: nextState });
+
+        // If we're in crisis_check and user just answered, provide follow-up.
+        if (prevState === 'crisis_check') {
+          const follow = buildCrisisFollowup(text);
+          reply = follow.message;
+          // Escalate again just in case
+          try { await escalateSession(); } catch (e) {}
+          botStateRef.current = follow.severity === 'high' ? 'crisis_check' : 'supportive';
+        }
         await saveMessage('assistant', reply, 'bot');
       }
     }, 1000 + Math.random() * 500);
@@ -338,30 +230,6 @@ export default function ChatScreen({ navigation, route }) {
                 <Text style={styles.quickReplyText}>{qr.emoji}  {qr.label}</Text>
               </TouchableOpacity>
             ))}
-          </View>
-        )}
-
-        {/* Helpline card */}
-        {showHelpline && (
-          <View style={styles.helplineCard}>
-            <Text style={styles.helplineTitle}>🆘 Immediate support available</Text>
-            <Text style={styles.helplineDesc}>
-              Trained counsellors are available right now. You don't have to explain everything — just call.
-            </Text>
-            <View style={styles.helplineRow}>
-              <Text style={styles.helplineName}>{HELPLINE.name}</Text>
-              <Text style={styles.helplineNumber}>{HELPLINE.number}</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.callBtn}
-              onPress={() => Linking.openURL(`tel:${HELPLINE.number}`)}>
-              <Text style={styles.callBtnText}>📞 Call Now</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.guardianBtn}
-              onPress={notifyGuardian}>
-              <Text style={styles.guardianBtnText}>🛡️ Notify my guardian</Text>
-            </TouchableOpacity>
           </View>
         )}
 
@@ -493,72 +361,6 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   quickReplyText: {
-    color: '#4f46e5',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  helplineCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 16,
-    marginTop: 8,
-    borderLeftWidth: 4,
-    borderLeftColor: '#ef4444',
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-  },
-  helplineTitle: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#ef4444',
-    marginBottom: 6,
-  },
-  helplineDesc: {
-    fontSize: 13,
-    color: '#64748b',
-    lineHeight: 19,
-    marginBottom: 12,
-  },
-  helplineRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  helplineName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1e293b',
-  },
-  helplineNumber: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#6366f1',
-  },
-  callBtn: {
-    backgroundColor: '#ef4444',
-    padding: 13,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  callBtnText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 15,
-  },
-  guardianBtn: {
-    backgroundColor: '#eef2ff',
-    padding: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#6366f1',
-  },
-  guardianBtnText: {
     color: '#4f46e5',
     fontWeight: '600',
     fontSize: 14,

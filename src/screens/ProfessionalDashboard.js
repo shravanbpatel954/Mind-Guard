@@ -10,8 +10,9 @@ import DashboardHeader from '../components/DashboardHeader';
 import firestore from '@react-native-firebase/firestore';
 import storage from '@react-native-firebase/storage';
 import { pick, isCancel, types } from '@react-native-documents/picker';
+import { createCallRequest } from '../calls/CallSignalingService';
 
-function ProfChatModal({ targetUserId, onClose }) {
+function ProfChatModal({ targetUserId, onClose, onPressVoiceCall, onPressVideoCall }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const scrollRef = useRef(null);
@@ -52,7 +53,14 @@ function ProfChatModal({ targetUserId, onClose }) {
             <Text style={styles.closeText}>Close</Text>
           </TouchableOpacity>
           <Text style={styles.modalTitle}>Emergency Chat Intervention</Text>
-          <View style={{ width: 40 }} />
+          <View style={styles.modalHeaderActions}>
+            <TouchableOpacity onPress={onPressVoiceCall} style={styles.iconBtn} accessibilityLabel="Start voice call">
+              <Text style={styles.iconBtnText}>📞</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onPressVideoCall} style={styles.iconBtn} accessibilityLabel="Start video call">
+              <Text style={styles.iconBtnText}>🎥</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <ScrollView ref={scrollRef} style={styles.chatScroll} contentContainerStyle={{ padding: 16 }}>
@@ -93,6 +101,7 @@ export default function ProfessionalDashboard({ navigation }) {
   const [myChats, setMyChats] = useState([]);
   const [activeChatUserId, setActiveChatUserId] = useState(null);
   const [showSetup, setShowSetup]       = useState(false);
+  const [placingCall, setPlacingCall] = useState(false);
 
   // Profile setup fields
   const [specialty, setSpecialty]       = useState('');
@@ -127,6 +136,40 @@ export default function ProfessionalDashboard({ navigation }) {
       if (!cancelled) {
         Alert.alert('Error', 'Failed to pick document: ' + (err?.message || String(err)));
       }
+    }
+  };
+
+  const getUserNameById = async (uid) => {
+    try {
+      const snapDoc = await firestore().collection('users').doc(uid).get();
+      return snapDoc.data()?.name || 'User';
+    } catch (e) {
+      return 'User';
+    }
+  };
+
+  const requestCall = async (client, mode) => {
+    if (!client?.userId) {
+      Alert.alert('Error', 'Missing user id for client.');
+      return;
+    }
+    if (placingCall) return;
+    setPlacingCall(true);
+    try {
+      const calleeName =
+        client.userName ||
+        client.name ||
+        (await getUserNameById(client.userId));
+      const { callId } = await createCallRequest({
+        calleeId: client.userId,
+        calleeName,
+        mode,
+      });
+      navigation.navigate('Call', { callId, role: 'caller', mode });
+    } catch (e) {
+      Alert.alert('Error', 'Could not start call. Please try again.');
+    } finally {
+      setPlacingCall(false);
     }
   };
 
@@ -551,6 +594,22 @@ export default function ProfessionalDashboard({ navigation }) {
                  <Text style={styles.clientName}>Active Crisis User</Text>
                  <Text style={styles.clientSince}>Waiting for your responses</Text>
                </View>
+               <View style={styles.clientActions}>
+                 <TouchableOpacity
+                   style={[styles.callBtn, placingCall && { opacity: 0.5 }]}
+                   onPress={() => requestCall({ userId: chat.userId }, 'voice')}
+                   disabled={placingCall}
+                 >
+                   <Text style={styles.callBtnText}>📞</Text>
+                 </TouchableOpacity>
+                 <TouchableOpacity
+                   style={[styles.videoBtn, placingCall && { opacity: 0.5 }]}
+                   onPress={() => requestCall({ userId: chat.userId }, 'video')}
+                   disabled={placingCall}
+                 >
+                   <Text style={styles.videoBtnText}>🎥</Text>
+                 </TouchableOpacity>
+               </View>
                <TouchableOpacity
                  style={styles.interveneBtn}
                  onPress={() => setActiveChatUserId(chat.userId)}>
@@ -648,6 +707,22 @@ export default function ProfessionalDashboard({ navigation }) {
                   Connected {formatTime(client.acceptedAt || client.timestamp)}
                 </Text>
               </View>
+              <View style={styles.clientActions}>
+                <TouchableOpacity
+                  style={[styles.callBtn, placingCall && { opacity: 0.5 }]}
+                  onPress={() => requestCall(client, 'voice')}
+                  disabled={placingCall}
+                >
+                  <Text style={styles.callBtnText}>Call</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.videoBtn, placingCall && { opacity: 0.5 }]}
+                  onPress={() => requestCall(client, 'video')}
+                  disabled={placingCall}
+                >
+                  <Text style={styles.videoBtnText}>Video</Text>
+                </TouchableOpacity>
+              </View>
               <View style={[
                 styles.clientRisk,
                 client.riskLevel === 'HIGH' && styles.riskHigh,
@@ -703,6 +778,8 @@ export default function ProfessionalDashboard({ navigation }) {
     {activeChatUserId && (
       <ProfChatModal
         targetUserId={activeChatUserId}
+        onPressVoiceCall={() => requestCall({ userId: activeChatUserId }, 'voice')}
+        onPressVideoCall={() => requestCall({ userId: activeChatUserId }, 'video')}
         onClose={() => setActiveChatUserId(null)}
       />
     )}
@@ -841,6 +918,25 @@ const styles = StyleSheet.create({
   clientInfo: { flex: 1 },
   clientName: { fontSize: 15, fontWeight: 'bold', color: '#1e293b' },
   clientSince: { fontSize: 12, color: '#94a3b8', marginTop: 2 },
+  clientActions: { flexDirection: 'row', gap: 8, marginRight: 10 },
+  callBtn: {
+    backgroundColor: '#eef2ff',
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  callBtnText: { color: '#4338ca', fontWeight: '800', fontSize: 12 },
+  videoBtn: {
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  videoBtnText: { color: '#166534', fontWeight: '800', fontSize: 12 },
   clientRisk: {
     width: 34, height: 34, borderRadius: 17,
     backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center',
@@ -866,6 +962,9 @@ const styles = StyleSheet.create({
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e2e8f0', backgroundColor: '#fff', paddingTop: 10, paddingBottom: 10, elevation: 2 },
   closeText: { color: '#64748b', fontWeight: '600', fontSize: 16 },
   modalTitle: { fontSize: 16, fontWeight: 'bold', color: '#1e293b' },
+  modalHeaderActions: { flexDirection: 'row', gap: 10, paddingRight: 10 },
+  iconBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#eef2ff', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#c7d2fe' },
+  iconBtnText: { fontSize: 18 },
   chatScroll: { flex: 1, backgroundColor: '#f8fafc' },
   bubble: { maxWidth: '80%', padding: 12, borderRadius: 18, marginBottom: 10 },
   botBubble: { backgroundColor: '#fff', alignSelf: 'flex-start', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#e2e8f0' },

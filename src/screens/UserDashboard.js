@@ -11,6 +11,8 @@ import {
   Modal,
   FlatList,
 } from 'react-native';
+import auth from '@react-native-firebase/auth';
+import firestore from '@react-native-firebase/firestore';
 import { checkPermission, getUsageStats } from '../monitoring/UsageMonitor';
 import {
   requestLocationPermission,
@@ -31,6 +33,7 @@ import {
   saveRiskScore,
 } from '../storage/LocalDB';
 import DashboardHeader from '../components/DashboardHeader';
+import { setCallStatus } from '../calls/CallSignalingService';
 
 const { width } = Dimensions.get('window');
 
@@ -661,6 +664,7 @@ const UserDashboard = ({ navigation }) => {
   const [deviations, setDeviations] = useState([]);
   const [daysTracked, setDaysTracked] = useState(0);
   const [detailModal, setDetailModal] = useState(null);
+  const [incomingCall, setIncomingCall] = useState(null);
 
   useEffect(() => {
     init();
@@ -683,6 +687,56 @@ const UserDashboard = ({ navigation }) => {
 
     return () => clearInterval(locationInterval);
   }, []);
+
+  useEffect(() => {
+    const uid = auth().currentUser?.uid;
+    if (!uid) return;
+
+    // Listen for call requests addressed to this user.
+    // Avoid composite-index requirements by filtering status client-side.
+    const unsub = firestore()
+      .collection('call_sessions')
+      .where('calleeId', '==', uid)
+      .limit(10)
+      .onSnapshot(
+        (snap) => {
+          const now = Date.now();
+          const pending = snap.docs
+            .map((d) => ({ id: d.id, ...d.data() }))
+            .filter((c) => c.status === 'pending' && (c.expiresAtMs || 0) > now)
+            .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0))[0];
+          setIncomingCall(pending || null);
+        },
+        (e) => console.log('Incoming call listener error', e),
+      );
+
+    return () => unsub();
+  }, []);
+
+  const acceptIncomingCall = async () => {
+    if (!incomingCall?.id) return;
+    try {
+      await setCallStatus(incomingCall.id, 'accepted');
+      setIncomingCall(null);
+      navigation.navigate('Call', {
+        callId: incomingCall.id,
+        role: 'callee',
+        mode: incomingCall.mode || 'voice',
+      });
+    } catch (e) {
+      Alert.alert('Error', 'Could not accept call. Please try again.');
+    }
+  };
+
+  const declineIncomingCall = async () => {
+    if (!incomingCall?.id) return;
+    try {
+      await setCallStatus(incomingCall.id, 'declined');
+      setIncomingCall(null);
+    } catch (e) {
+      Alert.alert('Error', 'Could not decline call.');
+    }
+  };
 
   const init = async () => {
     setLoading(true);
@@ -850,6 +904,24 @@ const UserDashboard = ({ navigation }) => {
 
   return (
     <>
+      <Modal visible={!!incomingCall} animationType="fade" transparent>
+        <View style={styles.callModalRoot}>
+          <View style={styles.callModalCard}>
+            <Text style={styles.callModalTitle}>Incoming call</Text>
+            <Text style={styles.callModalSubtitle}>
+              {incomingCall?.callerName || 'Professional'} is requesting a {incomingCall?.mode === 'video' ? 'video' : 'voice'} call.
+            </Text>
+            <View style={styles.callBtnRow}>
+              <TouchableOpacity style={styles.callDeclineBtn} onPress={declineIncomingCall}>
+                <Text style={styles.callDeclineText}>Decline</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.callAcceptBtn} onPress={acceptIncomingCall}>
+                <Text style={styles.callAcceptText}>Accept</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
       <MainDashboard
         todayStats={todayStats}
         baseline={baseline}
@@ -1079,6 +1151,41 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   locStatLine: { fontSize: 13, color: '#334155', lineHeight: 20, marginBottom: 8 },
+
+  callModalRoot: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+  },
+  callModalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 18,
+  },
+  callModalTitle: { fontSize: 18, fontWeight: '800', color: '#0f172a' },
+  callModalSubtitle: { fontSize: 14, color: '#475569', marginTop: 8, lineHeight: 20 },
+  callBtnRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  callDeclineBtn: {
+    flex: 1,
+    backgroundColor: '#fee2e2',
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  callDeclineText: { color: '#b91c1c', fontWeight: '800' },
+  callAcceptBtn: {
+    flex: 1,
+    backgroundColor: '#dcfce7',
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  callAcceptText: { color: '#166534', fontWeight: '800' },
 });
 
 export default UserDashboard;

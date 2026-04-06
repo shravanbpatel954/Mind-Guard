@@ -11,6 +11,7 @@ import GuardianDashboard from '../screens/GuardianDashboard';
 import ProfessionalDashboard from '../screens/ProfessionalDashboard';
 import SettingsScreen from '../screens/SettingsScreen';
 import AdminDashboard from '../screens/AdminDashboard';
+import CallScreen from '../screens/CallScreen';
 
 const Stack = createStackNavigator();
 
@@ -67,6 +68,7 @@ function AppStack({ initialRouteName }) {
       <Stack.Screen name="GuardianDashboard" component={GuardianDashboard} />
       <Stack.Screen name="ProfessionalDashboard" component={ProfessionalDashboard} />
       <Stack.Screen name="Chat" component={ChatScreen} />
+      <Stack.Screen name="Call" component={CallScreen} />
       <Stack.Screen name="Settings" component={SettingsScreen} />
     </Stack.Navigator>
   );
