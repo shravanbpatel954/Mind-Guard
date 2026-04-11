@@ -1,18 +1,20 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { useTheme } from '../theme/useTheme';
 
 /**
  * Top bar with title and settings (gear) — matches common Android app patterns.
  */
 export default function DashboardHeader({ title, subtitle, onOpenSettings }) {
+  const { colors } = useTheme();
   return (
     <View style={styles.wrap}>
       <View style={styles.textCol}>
-        <Text style={styles.title} numberOfLines={1}>
+        <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>
           {title}
         </Text>
         {subtitle ? (
-          <Text style={styles.subtitle} numberOfLines={2}>
+          <Text style={[styles.subtitle, { color: colors.subtext }]} numberOfLines={2}>
             {subtitle}
           </Text>
         ) : null}
@@ -20,7 +22,7 @@ export default function DashboardHeader({ title, subtitle, onOpenSettings }) {
       {onOpenSettings ? (
         <TouchableOpacity
           onPress={onOpenSettings}
-          style={styles.settingsBtn}
+          style={[styles.settingsBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           accessibilityRole="button"
           accessibilityLabel="Open settings">

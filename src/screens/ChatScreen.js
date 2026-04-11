@@ -1,8 +1,8 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
   TextInput, ScrollView, ActivityIndicator,
-  KeyboardAvoidingView, Platform, Alert, Linking,
+  KeyboardAvoidingView, Platform,
 } from 'react-native';
 import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
@@ -77,13 +77,13 @@ export default function ChatScreen({ navigation, route }) {
       unsubSession();
       unsubMessages();
     };
-  }, [uid, riskLevel]);
+  }, [uid, riskLevel, saveMessage]);
 
   useEffect(() => {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 150);
   }, [messages, loading]);
 
-  const saveMessage = async (role, content, authorId = 'user') => {
+  const saveMessage = useCallback(async (role, content, authorId = 'user') => {
     if (!uid) return;
     await firestore().collection('chat_sessions').doc(uid).collection('messages').add({
       role,
@@ -95,7 +95,7 @@ export default function ChatScreen({ navigation, route }) {
     await firestore().collection('chat_sessions').doc(uid).set({
       lastMessageAt: firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
-  };
+  }, [uid]);
 
   const escalateSession = async () => {
     if (!uid) return;
@@ -147,25 +147,6 @@ export default function ChatScreen({ navigation, route }) {
         await saveMessage('assistant', reply, 'bot');
       }
     }, 1000 + Math.random() * 500);
-  };
-
-  const notifyGuardian = async () => {
-    try {
-      if (!auth().currentUser?.uid) {
-        Alert.alert('Error', 'Not logged in.');
-        return;
-      }
-      const info = await sendHelpRequestAlert();
-      if (info?.alertId) {
-        startLiveLocationSharing(info.alertId, info.expiresAtMs);
-      }
-      Alert.alert(
-        '✅ Guardian Notified',
-        'Your guardian has been notified that you reached out for support.'
-      );
-    } catch (e) {
-      Alert.alert('Error', 'Could not notify guardian. Please try again.');
-    }
   };
 
   return (

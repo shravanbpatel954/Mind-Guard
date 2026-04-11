@@ -166,7 +166,7 @@ export default function CallScreen({ navigation, route }) {
         console.log('Answer flow error', e);
       }
     })();
-  }, [call?.offer]);
+  }, [call?.offer, call?.answer, callId, role]);
 
   useEffect(() => {
     const pc = pcRef.current;
@@ -179,7 +179,7 @@ export default function CallScreen({ navigation, route }) {
         console.log('Set remote answer error', e);
       }
     })();
-  }, [call?.answer]);
+  }, [call?.answer, callId, role]);
 
   const cleanup = async () => {
     if (teardownRef.current) return;

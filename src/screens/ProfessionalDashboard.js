@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView,
   TouchableOpacity, ActivityIndicator,
@@ -177,16 +177,7 @@ export default function ProfessionalDashboard({ navigation }) {
   const escListenerRef = useRef(null);
   const myChatListenerRef = useRef(null);
 
-  useEffect(() => {
-    loadDashboard();
-    return () => { 
-      if (listenerRef.current) listenerRef.current(); 
-      if (escListenerRef.current) escListenerRef.current();
-      if (myChatListenerRef.current) myChatListenerRef.current();
-    };
-  }, []);
-
-  const loadDashboard = async () => {
+  const loadDashboard = useCallback(async () => {
     try {
       const uid = auth().currentUser?.uid;
       if (!uid) return;
@@ -208,7 +199,16 @@ export default function ProfessionalDashboard({ navigation }) {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadDashboard();
+    return () => { 
+      if (listenerRef.current) listenerRef.current(); 
+      if (escListenerRef.current) escListenerRef.current();
+      if (myChatListenerRef.current) myChatListenerRef.current();
+    };
+  }, [loadDashboard]);
 
   const startRequestsListener = (uid) => {
     if (listenerRef.current) listenerRef.current();

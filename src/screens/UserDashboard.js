@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -686,7 +686,7 @@ const UserDashboard = ({ navigation }) => {
     }, intervalMs);
 
     return () => clearInterval(locationInterval);
-  }, []);
+  }, [init]);
 
   useEffect(() => {
     const uid = auth().currentUser?.uid;
@@ -738,29 +738,7 @@ const UserDashboard = ({ navigation }) => {
     }
   };
 
-  const init = async () => {
-    setLoading(true);
-    try {
-      await ensureInstallConsistency();
-      await ensureMonitoringStartTs();
-
-      try {
-        await requestLocationPermission();
-      } catch (e) {
-        console.log('Location init skipped:', e);
-      }
-
-      const granted = await checkPermission();
-      setHasPerm(granted);
-      if (granted) await loadAndAnalyze();
-    } catch (e) {
-      console.log('Dashboard init error:', e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadAndAnalyze = async () => {
+  const loadAndAnalyze = useCallback(async () => {
     const stats = await getUsageStats();
     if (!stats) return;
 
@@ -840,7 +818,29 @@ const UserDashboard = ({ navigation }) => {
         }
       }, 0);
     }
-  };
+  }, [navigation]);
+
+  const init = useCallback(async () => {
+    setLoading(true);
+    try {
+      await ensureInstallConsistency();
+      await ensureMonitoringStartTs();
+
+      try {
+        await requestLocationPermission();
+      } catch (e) {
+        console.log('Location init skipped:', e);
+      }
+
+      const granted = await checkPermission();
+      setHasPerm(granted);
+      if (granted) await loadAndAnalyze();
+    } catch (e) {
+      console.log('Dashboard init error:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, [loadAndAnalyze]);
 
   // ── RENDER ──
   if (loading) {

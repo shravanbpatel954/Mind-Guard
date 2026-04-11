@@ -12,6 +12,8 @@ import ProfessionalDashboard from '../screens/ProfessionalDashboard';
 import SettingsScreen from '../screens/SettingsScreen';
 import AdminDashboard from '../screens/AdminDashboard';
 import CallScreen from '../screens/CallScreen';
+import { ThemeProvider } from '../theme/ThemeProvider';
+import { isValidMindGuardProfile } from '../utils/mindguardProfile';
 
 const Stack = createStackNavigator();
 
@@ -25,20 +27,21 @@ const RETRY_INTERVAL_MS = 250;
  */
 async function fetchUserProfileWithRetry(uid) {
   const start = Date.now();
-  let attempt = 0;
   while (Date.now() - start < MAX_PROFILE_WAIT_MS) {
     try {
       const doc = await firestore().collection('users').doc(uid).get();
       if (doc.exists) {
         const data = doc.data();
-        const r = data?.role;
-        const role = r === 'guardian' || r === 'professional' ? r : 'user';
-        return { role, data };
+        if (isValidMindGuardProfile(data)) {
+          const r = data.role;
+          const role = r === 'guardian' || r === 'professional' ? r : 'user';
+          return { role, data };
+        }
+        // Doc exists but incomplete (e.g. signup still writing). Keep retrying.
       }
     } catch (e) {
       console.log('Profile fetch attempt error:', e);
     }
-    attempt += 1;
     await new Promise((r) => setTimeout(r, RETRY_INTERVAL_MS));
   }
   return null;
@@ -126,13 +129,15 @@ const AppNavigator = () => {
   const homeScreen = getHomeScreenForRole(authState.role);
 
   return (
-    <NavigationContainer key={authState.user ? authState.user.uid : 'auth'}>
-      {authState.user ? (
-        <AppStack key={authState.user.uid} initialRouteName={homeScreen} />
-      ) : (
-        <AuthStack />
-      )}
-    </NavigationContainer>
+    <ThemeProvider>
+      <NavigationContainer key={authState.user ? authState.user.uid : 'auth'}>
+        {authState.user ? (
+          <AppStack key={authState.user.uid} initialRouteName={homeScreen} />
+        ) : (
+          <AuthStack />
+        )}
+      </NavigationContainer>
+    </ThemeProvider>
   );
 };
 

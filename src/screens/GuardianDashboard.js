@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -273,16 +273,7 @@ export default function GuardianDashboard({ navigation }) {
   const listenerRef = useRef(null);
   const chatSessionsListenerRefs = useRef([]);
 
-  useEffect(() => {
-    loadProfile();
-    loadLinkedUsers();
-    return () => {
-      if (listenerRef.current) listenerRef.current();
-      chatSessionsListenerRefs.current.forEach(unsub => unsub());
-    };
-  }, []);
-
-  const loadProfile = async () => {
+  const loadProfile = useCallback(async () => {
     try {
       const uid = auth().currentUser?.uid;
       if (!uid) return;
@@ -291,10 +282,10 @@ export default function GuardianDashboard({ navigation }) {
     } catch (e) {
       console.log('Profile error:', e);
     }
-  };
+  }, []);
 
   /** Alerts where this guardian is listed — scales past Firestore `in` limit of 10. */
-  const startAlertsListener = (guardianUid) => {
+  const startAlertsListener = useCallback((guardianUid) => {
     if (listenerRef.current) listenerRef.current();
 
     // Avoid composite-index requirement by not ordering in the query.
@@ -316,9 +307,9 @@ export default function GuardianDashboard({ navigation }) {
       },
       (error) => console.log('Alerts listener error:', error)
     );
-  };
+  }, []);
 
-  const loadLinkedUsers = async () => {
+  const loadLinkedUsers = useCallback(async () => {
     try {
       const uid = auth().currentUser?.uid;
       if (!uid) return;
@@ -366,7 +357,16 @@ export default function GuardianDashboard({ navigation }) {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [startAlertsListener]);
+
+  useEffect(() => {
+    loadProfile();
+    loadLinkedUsers();
+    return () => {
+      if (listenerRef.current) listenerRef.current();
+      chatSessionsListenerRefs.current.forEach(unsub => unsub());
+    };
+  }, [loadProfile, loadLinkedUsers]);
 
   const markAlertRead = async (alertId) => {
     try {

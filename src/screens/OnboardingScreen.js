@@ -6,6 +6,7 @@ import {
   View, Text, TextInput, TouchableOpacity,
   StyleSheet, ScrollView, Alert, ActivityIndicator,
 } from 'react-native';
+import { isValidMindGuardProfile } from '../utils/mindguardProfile';
 
 GoogleSignin.configure({
   webClientId: '577940346171-i3k4jlr8cvsqlih2d4k57f1pvlosmh56.apps.googleusercontent.com',
@@ -50,10 +51,17 @@ const OnboardingScreen = ({ navigation }) => {
       email.trim(),
       password
     );
-    const userData = await getUserFromFirestore(credential.user.uid);
-    if (!userData) {
+    let userData;
+    try {
+      userData = await getUserFromFirestore(credential.user.uid);
+    } catch (e) {
       await auth().signOut();
-      Alert.alert('Not Found', 'No account found. Please sign up first.');
+      Alert.alert('Error', 'Could not verify your account. Check your connection and try again.');
+      return;
+    }
+    if (!isValidMindGuardProfile(userData)) {
+      await auth().signOut();
+      Alert.alert('Not Found', 'No MindGuard account exists for this email. Please sign up first.');
       return;
     }
     // Navigation is handled automatically by AppNavigator
@@ -104,7 +112,8 @@ const OnboardingScreen = ({ navigation }) => {
           [{ text: 'OK', onPress: () => setIsLogin(true) }]
         );
       } else {
-        Alert.alert('Error', getErrorMessage(error.code));
+        const msg = getErrorMessage(error.code) || error.message || 'Something went wrong. Please try again.';
+        Alert.alert('Error', msg);
       }
     } finally {
       setLoading(false);
@@ -137,8 +146,8 @@ const OnboardingScreen = ({ navigation }) => {
       const existingUser = await getUserFromFirestore(uid);
   
       if (isLogin) {
-        // LOGIN TAB → account must already exist
-        if (!existingUser || !existingUser.role) {
+        // LOGIN TAB → account must already exist with a complete app profile
+        if (!isValidMindGuardProfile(existingUser)) {
           await auth().signOut();
           Alert.alert('Not Found', 'No account found with this Google account. Please sign up first.');
           return;
@@ -146,7 +155,7 @@ const OnboardingScreen = ({ navigation }) => {
         // Navigation is handled automatically by AppNavigator
       } else {
         // SIGNUP TAB → account must NOT exist
-        if (existingUser && existingUser.role) {
+        if (isValidMindGuardProfile(existingUser)) {
           await auth().signOut();
           Alert.alert('Already Registered', 'This Google account is already registered. Please login.',
             [{ text: 'OK', onPress: () => setIsLogin(true) }]

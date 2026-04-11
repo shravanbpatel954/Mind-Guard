@@ -12,12 +12,13 @@ import {
   TextInput,
   Share,
   Modal,
-  PermissionsAndroid,
   Animated,
 } from 'react-native';
 import { Camera, useCameraDevice, useCodeScanner } from 'react-native-vision-camera';
 import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
+import { ThemeMode } from '../theme/tokens';
+import { useTheme } from '../theme/useTheme';
 
 let APP_VERSION = '0.0.1';
 try {
@@ -157,6 +158,7 @@ function PairingQrSection({ pairingCode, styles }) {
 }
 
 export default function SettingsScreen({ navigation }) {
+  const { colors, mode: themeMode, setMode: setThemeMode } = useTheme();
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -499,8 +501,8 @@ export default function SettingsScreen({ navigation }) {
 
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#6366f1" />
+      <View style={[styles.centered, { backgroundColor: colors.bg }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -508,63 +510,74 @@ export default function SettingsScreen({ navigation }) {
   return (
     <>
       <ScrollView
-        style={styles.container}
+        style={[styles.container, { backgroundColor: colors.bg }]}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}>
       <TouchableOpacity style={styles.backRow} onPress={() => navigation.goBack()} hitSlop={12}>
-        <Text style={styles.backArrow}>←</Text>
-        <Text style={styles.backText}>Back</Text>
+        <Text style={[styles.backArrow, { color: colors.primary }]}>←</Text>
+        <Text style={[styles.backText, { color: colors.primary }]}>Back</Text>
       </TouchableOpacity>
 
-      <Text style={styles.pageTitle}>Settings</Text>
-      <Text style={styles.pageSub}>Account, privacy, and app preferences</Text>
+      <Text style={[styles.pageTitle, { color: colors.text }]}>Settings</Text>
+      <Text style={[styles.pageSub, { color: colors.subtext }]}>Account and preferences</Text>
 
-      <View style={styles.card}>
+      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <Text style={styles.cardLabel}>Profile</Text>
         <View style={styles.avatarRow}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{(name || email || '?').charAt(0).toUpperCase()}</Text>
+          <View style={[styles.avatar, { backgroundColor: colors.inputBg }]}>
+            <Text style={[styles.avatarText, { color: colors.primary }]}>{(name || email || '?').charAt(0).toUpperCase()}</Text>
           </View>
           <View style={styles.profileText}>
-            <Text style={styles.profileName}>{name || 'MindGuard user'}</Text>
-            <Text style={styles.profileEmail}>{email || '—'}</Text>
-            <Text style={styles.profileRole}>{ROLE_LABELS[role] || ROLE_LABELS.user}</Text>
+            <Text style={[styles.profileName, { color: colors.text }]}>{name || 'MindGuard user'}</Text>
+            <Text style={[styles.profileEmail, { color: colors.subtext }]}>{email || '—'}</Text>
+            <Text style={[styles.profileRole, { color: colors.primary }]}>{ROLE_LABELS[role] || ROLE_LABELS.user}</Text>
           </View>
         </View>
-        <Text style={styles.hint}>
-          To change your display name, contact support or update it when your account flow supports editing.
-        </Text>
+        <Text style={[styles.hint, { color: colors.muted }]}>Name editing will be added soon.</Text>
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.cardLabel}>Privacy & data</Text>
-        <Text style={styles.body}>
-          Usage and behaviour data are analysed on your device. Only summaries and alerts you choose to share
-          (for example with a guardian) are stored in the cloud for MindGuard features.
-        </Text>
+      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Text style={styles.cardLabel}>Appearance</Text>
+        <Text style={[styles.body, { color: colors.subtext }]}>Theme</Text>
+        <View style={styles.rowButtons}>
+          {[
+            { id: ThemeMode.system, label: 'System' },
+            { id: ThemeMode.light, label: 'Light' },
+            { id: ThemeMode.dark, label: 'Dark' },
+          ].map((opt) => {
+            const active = themeMode === opt.id;
+            return (
+              <TouchableOpacity
+                key={opt.id}
+                style={[
+                  styles.chip,
+                  { borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.inputBg : 'transparent' },
+                ]}
+                onPress={() => setThemeMode(opt.id)}
+              >
+                <Text style={[styles.chipText, { color: active ? colors.primary : colors.subtext }]}>{opt.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
 
-      <View style={styles.card}>
+      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <Text style={styles.cardLabel}>Permissions</Text>
-        <Text style={styles.body}>
-          Usage access and location can be changed in Android system settings for MindGuard.
-        </Text>
-        <TouchableOpacity style={styles.primaryBtn} onPress={openSystemSettings}>
-          <Text style={styles.primaryBtnText}>Open app settings</Text>
+        <Text style={[styles.body, { color: colors.subtext }]}>Manage permissions in system settings.</Text>
+        <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: colors.primary }]} onPress={openSystemSettings}>
+          <Text style={[styles.primaryBtnText, { color: colors.primaryText }]}>Open system settings</Text>
         </TouchableOpacity>
       </View>
 
       {role === 'user' && (
-        <View style={styles.card}>
-          <Text style={styles.cardLabel}>Connect a guardian</Text>
-          <Text style={styles.body}>
-            Share the QR or short code with your guardian — same pairing link either way. Stays active until you
-            revoke it.
-          </Text>
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={styles.cardLabel}>Guardian</Text>
+          <Text style={[styles.body, { color: colors.subtext }]}>Generate a code and share it with your guardian.</Text>
           <View style={styles.codeBox}>
             <Text style={styles.codeLabel}>Pairing code</Text>
-            <Text style={styles.codeValue}>{pairingCode || '------'}</Text>
-            <Text style={styles.codeExpiry}>Status: {pairingCode ? 'Active' : 'Not generated'}</Text>
+            <Text style={[styles.codeValue, { color: colors.text }]}>{pairingCode || '------'}</Text>
+            <Text style={[styles.codeExpiry, { color: colors.subtext }]}>Status: {pairingCode ? 'Active' : 'Not generated'}</Text>
           </View>
           {pairingCode ? <PairingQrSection pairingCode={pairingCode} styles={styles} /> : null}
           <View style={styles.rowButtons}>
@@ -596,12 +609,9 @@ export default function SettingsScreen({ navigation }) {
       )}
 
       {role === 'guardian' && (
-        <View style={styles.card}>
-          <Text style={styles.cardLabel}>Add monitored user</Text>
-          <Text style={styles.body}>
-            Scan the user&apos;s QR with your camera (then paste the result), or type the 6-character code / full
-            pairing text to connect and receive risk alerts.
-          </Text>
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={styles.cardLabel}>Monitored users</Text>
+          <Text style={[styles.body, { color: colors.subtext }]}>Scan QR or enter a 6‑character code.</Text>
 
           <Text style={styles.linkCount}>
             {linkedUsersBusy ? 'Checking links...' : `Connected users: ${linkedUsersCount ?? 0}`}
@@ -610,7 +620,7 @@ export default function SettingsScreen({ navigation }) {
           <TextInput
             value={pairInput}
             onChangeText={setPairInput}
-            style={styles.input}
+            style={[styles.input, { backgroundColor: colors.inputBg, borderColor: colors.border, color: colors.text }]}
             placeholder="Example: AB3K9Q or MINDGUARD_PAIR:AB3K9Q"
             placeholderTextColor="#94a3b8"
             autoCapitalize="characters"
@@ -661,30 +671,9 @@ export default function SettingsScreen({ navigation }) {
 
       <View style={styles.card}>
         <Text style={styles.cardLabel}>About</Text>
-        <Text style={styles.body}>MindGuard — mental wellness companion on your phone.</Text>
-        <Text style={styles.version}>Version {APP_VERSION}</Text>
-        <Text style={styles.platform}>{Platform.OS === 'ios' ? 'iOS' : 'Android'}</Text>
+        <Text style={[styles.body, { color: colors.subtext }]}>MindGuard</Text>
+        <Text style={[styles.version, { color: colors.subtext }]}>Version {APP_VERSION}</Text>
       </View>
-
-      {role === 'user' && (
-      <View style={styles.card}>
-        <Text style={styles.cardLabel}>Developer Tools 🛠️</Text>
-        <Text style={styles.body}>Skip the 7-day learning period by injecting fake history directly into your local database.</Text>
-        <TouchableOpacity 
-          style={[styles.primaryBtnSmall, { marginTop: 12, paddingVertical: 12, width: '100%', backgroundColor: '#8b5cf6' }]} 
-          onPress={async () => {
-            const { injectFakeBaseline } = require('../storage/LocalDB');
-            const success = await injectFakeBaseline();
-            if (success) {
-              Alert.alert('Success', '7-day fake history injected! Please tap "Refresh data" on your dashboard to see CalmBot.');
-            } else {
-              Alert.alert('Error', 'Could not inject fake history.');
-            }
-          }}>
-          <Text style={styles.primaryBtnText}>Inject 7-Day Fake History</Text>
-        </TouchableOpacity>
-      </View>
-      )}
 
       <TouchableOpacity style={styles.logoutBtn} onPress={confirmLogout} activeOpacity={0.85}>
         <Text style={styles.logoutText}>Log out</Text>
@@ -825,6 +814,15 @@ const styles = StyleSheet.create({
   qrFallbackText: { fontSize: 12, color: '#334155' },
   qrHint: { fontSize: 12, color: '#64748b', textAlign: 'center', lineHeight: 18 },
   rowButtons: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  chip: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipText: { fontSize: 13, fontWeight: '800' },
   secondaryBtn: {
     flex: 1,
     borderWidth: 1.5,
