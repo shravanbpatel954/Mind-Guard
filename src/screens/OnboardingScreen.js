@@ -32,6 +32,14 @@ const OnboardingScreen = ({ navigation }) => {
     return doc.exists ? doc.data() : null;
   };
 
+  const alertAccountExistsLogin = (onOk) => {
+    Alert.alert(
+      'Account already exists',
+      'This email is already registered. Log in with your existing account — you cannot create a second account with a different role.',
+      [{ text: 'OK', onPress: onOk }]
+    );
+  };
+
   const getErrorMessage = (code) => {
     switch (code) {
       case 'auth/invalid-email': return 'Please enter a valid email address.';
@@ -61,23 +69,83 @@ const OnboardingScreen = ({ navigation }) => {
     }
     if (!isValidMindGuardProfile(userData)) {
       await auth().signOut();
-      Alert.alert('Not Found', 'No MindGuard account exists for this email. Please sign up first.');
+      Alert.alert(
+        'Finish registration',
+        'This email is registered, but your MindGuard profile was never completed (for example, the app closed during sign-up). Open Sign Up, enter the same email and password, pick your role, then tap Create account — we will complete your profile.',
+      );
       return;
     }
     // Navigation is handled automatically by AppNavigator
   };
 
+  /**
+   * Auth user exists (email in use) but Firestore may be missing — e.g. app killed after createUser
+   * but before saveUserToFirestore. Sign in with the same password and write the profile.
+   */
+  const tryFinishOrphanEmailSignup = async (emailTrimmed, passwordPlain) => {
+    let credential;
+    try {
+      credential = await auth().signInWithEmailAndPassword(emailTrimmed, passwordPlain);
+    } catch (e) {
+      if (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') {
+        Alert.alert(
+          'Email already in use',
+          'This email is already registered. Log in with the password you used when you first registered, or use Forgot password in your Firebase / account settings if you need to reset it.',
+        );
+        return;
+      }
+      throw e;
+    }
+
+    let userData;
+    try {
+      userData = await getUserFromFirestore(credential.user.uid);
+    } catch (e) {
+      await auth().signOut();
+      Alert.alert('Error', 'Could not verify your account. Check your connection and try again.');
+      return;
+    }
+
+    if (isValidMindGuardProfile(userData)) {
+      // Full account already — open the app (do not sign out: that caused "sign up says exists, login says not found").
+      return;
+    }
+
+    try {
+      await saveUserToFirestore(credential.user.uid, {
+        name: name.trim(),
+        email: credential.user.email,
+        role: role,
+        createdAt: firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      await auth().signOut();
+      Alert.alert('Error', 'Could not save your profile. Check your connection and try again.');
+      throw e;
+    }
+    // Signed in + profile written — AppNavigator continues
+  };
+
   const handleEmailSignup = async () => {
-    const userCredential = await auth().createUserWithEmailAndPassword(
-      email.trim(),
-      password
-    );
-    await saveUserToFirestore(userCredential.user.uid, {
-      name: name.trim(),
-      email: userCredential.user.email,
-      role: role,
-      createdAt: firestore.FieldValue.serverTimestamp(),
-    });
+    const emailTrimmed = email.trim();
+    try {
+      const userCredential = await auth().createUserWithEmailAndPassword(
+        emailTrimmed,
+        password
+      );
+      await saveUserToFirestore(userCredential.user.uid, {
+        name: name.trim(),
+        email: userCredential.user.email,
+        role: role,
+        createdAt: firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      if (error.code === 'auth/email-already-in-use') {
+        await tryFinishOrphanEmailSignup(emailTrimmed, password);
+        return;
+      }
+      throw error;
+    }
     // Navigation is handled automatically by AppNavigator
   };
 
@@ -105,16 +173,8 @@ const OnboardingScreen = ({ navigation }) => {
         await handleEmailSignup();
       }
     } catch (error) {
-      if (error.code === 'auth/email-already-in-use') {
-        Alert.alert(
-          'Already Registered',
-          'This email is already registered. Please login.',
-          [{ text: 'OK', onPress: () => setIsLogin(true) }]
-        );
-      } else {
-        const msg = getErrorMessage(error.code) || error.message || 'Something went wrong. Please try again.';
-        Alert.alert('Error', msg);
-      }
+      const msg = getErrorMessage(error.code) || error.message || 'Something went wrong. Please try again.';
+      Alert.alert('Error', msg);
     } finally {
       setLoading(false);
     }
@@ -143,8 +203,9 @@ const OnboardingScreen = ({ navigation }) => {
       const gEmail = currentUser.email || '';
       const displayName = currentUser.displayName || '';
   
-      const existingUser = await getUserFromFirestore(uid);
-  
+      const userDocSnap = await firestore().collection('users').doc(uid).get();
+      const existingUser = userDocSnap.exists ? userDocSnap.data() : null;
+
       if (isLogin) {
         // LOGIN TAB → account must already exist with a complete app profile
         if (!isValidMindGuardProfile(existingUser)) {
@@ -154,12 +215,11 @@ const OnboardingScreen = ({ navigation }) => {
         }
         // Navigation is handled automatically by AppNavigator
       } else {
-        // SIGNUP TAB → account must NOT exist
+        // SIGNUP TAB → block only when Firestore already has a *complete* profile (same Google uid).
+        // A stub doc (exists but no valid role) must not block — otherwise "account exists" while login says no profile.
         if (isValidMindGuardProfile(existingUser)) {
           await auth().signOut();
-          Alert.alert('Already Registered', 'This Google account is already registered. Please login.',
-            [{ text: 'OK', onPress: () => setIsLogin(true) }]
-          );
+          alertAccountExistsLogin(() => setIsLogin(true));
           return;
         }
         await saveUserToFirestore(uid, {
@@ -172,7 +232,16 @@ const OnboardingScreen = ({ navigation }) => {
       }
     } catch (error) {
       if (error.code !== 'SIGN_IN_CANCELLED') {
-        Alert.alert('Google Sign In Failed', error.message);
+        if (error.code === 'auth/account-exists-with-different-credential') {
+          try {
+            await auth().signOut();
+          } catch (e) {
+            /* ignore */
+          }
+          alertAccountExistsLogin(() => setIsLogin(true));
+        } else {
+          Alert.alert('Google Sign In Failed', error.message);
+        }
       }
     } finally {
       setLoading(false);

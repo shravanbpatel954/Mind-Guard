@@ -13,7 +13,7 @@ import SettingsScreen from '../screens/SettingsScreen';
 import AdminDashboard from '../screens/AdminDashboard';
 import CallScreen from '../screens/CallScreen';
 import { ThemeProvider } from '../theme/ThemeProvider';
-import { isValidMindGuardProfile } from '../utils/mindguardProfile';
+import { isValidMindGuardProfile, normalizeMindGuardRole } from '../utils/mindguardProfile';
 
 const Stack = createStackNavigator();
 
@@ -33,7 +33,7 @@ async function fetchUserProfileWithRetry(uid) {
       if (doc.exists) {
         const data = doc.data();
         if (isValidMindGuardProfile(data)) {
-          const r = data.role;
+          const r = normalizeMindGuardRole(data);
           const role = r === 'guardian' || r === 'professional' ? r : 'user';
           return { role, data };
         }
@@ -82,8 +82,12 @@ const AppNavigator = () => {
 
   useEffect(() => {
     let mounted = true;
+    /** Bumps on every auth event so stale async work (e.g. profile fetch) cannot apply after sign-out. */
+    let authEpoch = 0;
 
     const unsubscribe = auth().onAuthStateChanged(async (firebaseUser) => {
+      const epoch = ++authEpoch;
+
       if (!firebaseUser) {
         if (mounted) {
           setAuthState({ ready: true, user: null, role: 'user' });
@@ -91,9 +95,18 @@ const AppNavigator = () => {
         return;
       }
 
-      const profile = await fetchUserProfileWithRetry(firebaseUser.uid);
+      const uid = firebaseUser.uid;
+      const profile = await fetchUserProfileWithRetry(uid);
 
       if (!mounted) return;
+      if (epoch !== authEpoch) return;
+
+      if (auth().currentUser?.uid !== uid) {
+        if (mounted) {
+          setAuthState({ ready: true, user: null, role: 'user' });
+        }
+        return;
+      }
 
       if (!profile) {
         try {
@@ -101,7 +114,16 @@ const AppNavigator = () => {
         } catch (e) {
           console.log('Sign out (no profile):', e);
         }
+        if (!mounted || epoch !== authEpoch) return;
         setAuthState({ ready: true, user: null, role: 'user' });
+        return;
+      }
+
+      if (epoch !== authEpoch) return;
+      if (auth().currentUser?.uid !== uid) {
+        if (mounted) {
+          setAuthState({ ready: true, user: null, role: 'user' });
+        }
         return;
       }
 

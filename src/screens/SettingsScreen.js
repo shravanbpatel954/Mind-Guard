@@ -19,6 +19,7 @@ import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
 import { ThemeMode } from '../theme/tokens';
 import { useTheme } from '../theme/useTheme';
+import { normalizeMindGuardRole } from '../utils/mindguardProfile';
 
 let APP_VERSION = '0.0.1';
 try {
@@ -193,9 +194,8 @@ export default function SettingsScreen({ navigation }) {
       if (doc.exists) {
         const d = doc.data();
         setName(d?.name || '');
-        const r = d?.role;
-        if (r === 'guardian' || r === 'professional' || r === 'user') setRole(r);
-        else setRole('user');
+        const r = normalizeMindGuardRole(d);
+        setRole(r || 'user');
         setPairingCode(d?.pairingCode || '');
       } else {
         setName(u.displayName || '');
