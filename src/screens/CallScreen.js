@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, Platform } from 'react-native';
 import { RTCView } from 'react-native-webrtc';
 import {
@@ -39,9 +39,83 @@ export default function CallScreen({ navigation, route }) {
   const pcRef = useRef(null);
   const joinedRef = useRef(false);
   const teardownRef = useRef(false);
+  const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
+  const remoteIceGateRef = useRef(false);
+  const icePendingRef = useRef([]);
+  const calleeAnswerSentRef = useRef(false);
+  const callerRemoteAnswerAppliedRef = useRef(false);
+  const leavingRef = useRef(false);
 
   const isVideo = mode === 'video';
   const title = useMemo(() => (isVideo ? 'Video call' : 'Voice call'), [isVideo]);
+
+  const flushIceQueue = useCallback(async () => {
+    const pc = pcRef.current;
+    if (!pc || !remoteIceGateRef.current) return;
+    const pending = [...icePendingRef.current];
+    icePendingRef.current = [];
+    for (const cand of pending) {
+      try {
+        await addIceCandidate(pc, cand);
+      } catch (e) {
+        console.log('ICE flush error', e);
+      }
+    }
+  }, []);
+
+  const enqueueOrAddIce = useCallback(
+    async (cand) => {
+      const pc = pcRef.current;
+      if (!pc) {
+        icePendingRef.current.push(cand);
+        return;
+      }
+      if (!remoteIceGateRef.current) {
+        icePendingRef.current.push(cand);
+        return;
+      }
+      try {
+        await addIceCandidate(pc, cand);
+      } catch (e) {
+        icePendingRef.current.push(cand);
+      }
+    },
+    [],
+  );
+
+  const cleanup = useCallback(async () => {
+    if (teardownRef.current) return;
+    teardownRef.current = true;
+    remoteIceGateRef.current = false;
+    icePendingRef.current = [];
+    try {
+      if (pcRef.current) {
+        try {
+          pcRef.current.ontrack = null;
+          pcRef.current.onicecandidate = null;
+          pcRef.current.close();
+        } catch (e) {}
+        pcRef.current = null;
+      }
+      if (localStreamRef.current) stopStream(localStreamRef.current);
+      if (remoteStreamRef.current) stopStream(remoteStreamRef.current);
+      localStreamRef.current = null;
+      remoteStreamRef.current = null;
+      setLocalStreamState(null);
+      setRemoteStreamState(null);
+      await stopInCallAudio();
+    } catch (e) {}
+  }, []);
+
+  const leaveCall = useCallback(async () => {
+    if (leavingRef.current) return;
+    leavingRef.current = true;
+    await cleanup();
+    try {
+      navigation.goBack();
+    } catch (e) {}
+  }, [cleanup, navigation]);
 
   useEffect(() => {
     if (!callId || (role !== 'caller' && role !== 'callee')) {
@@ -53,6 +127,43 @@ export default function CallScreen({ navigation, route }) {
     let unsubCall = null;
     let unsubCandidates = null;
 
+    const joinIfPossible = async () => {
+      if (joinedRef.current) return;
+      joinedRef.current = true;
+      remoteIceGateRef.current = false;
+
+      const pc = createPeerConnection({
+        onIceCandidate: async (cand) => {
+          try {
+            await addCandidate(callId, role, cand);
+          } catch (e) {
+            console.log('Add candidate error', e);
+          }
+        },
+        onRemoteStream: (s) => {
+          remoteStreamRef.current = s;
+          setRemoteStreamState(s);
+        },
+      });
+      pcRef.current = pc;
+
+      const stream = await getLocalStream(mode);
+      localStreamRef.current = stream;
+      setLocalStreamState(stream);
+      stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+
+      await startInCallAudio({ video: isVideo });
+
+      if (role === 'caller') {
+        const offerDesc = await pc.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: isVideo,
+        });
+        const local = await setLocalDescription(pc, offerDesc);
+        await attachOffer(callId, local);
+      }
+    };
+
     const start = async () => {
       try {
         setStatus(role === 'caller' ? 'ringing' : 'connecting');
@@ -60,29 +171,24 @@ export default function CallScreen({ navigation, route }) {
           callId,
           (c) => {
             setCall(c);
-            if (c.status === 'declined') setStatus('declined');
-            if (c.status === 'missed') setStatus('missed');
-            if (c.status === 'ended') setStatus('ended');
-            if (c.status === 'accepted') setStatus('connected');
+            const st = c.status;
+            if (st === 'ended' || st === 'declined' || st === 'missed') {
+              setStatus(st);
+            } else if (st === 'accepted') {
+              setStatus('connected');
+            } else if (st === 'pending' && role === 'caller') {
+              setStatus('ringing');
+            } else if (st === 'pending') {
+              setStatus('connecting');
+            }
           },
           (e) => console.log('Call doc listen error', e),
         );
 
-        unsubCandidates = listenToCandidates(
-          callId,
-          role,
-          async (cand) => {
-            if (!pcRef.current) return;
-            try {
-              await addIceCandidate(pcRef.current, cand);
-            } catch (e) {
-              console.log('Add ICE error', e);
-            }
-          },
-          (e) => console.log('Candidate listen error', e),
-        );
+        unsubCandidates = listenToCandidates(callId, role, (cand) => {
+          enqueueOrAddIce(cand).catch(() => {});
+        }, (e) => console.log('Candidate listen error', e));
 
-        // If caller, periodically mark missed after timeout
         if (role === 'caller') {
           setTimeout(() => markMissedIfExpired(callId).catch(() => {}), 50 * 1000);
         }
@@ -90,6 +196,7 @@ export default function CallScreen({ navigation, route }) {
         await joinIfPossible();
       } catch (e) {
         console.log('Call start error', e);
+        joinedRef.current = false;
         Alert.alert('Error', 'Could not start call.');
         navigation.goBack();
       }
@@ -105,139 +212,108 @@ export default function CallScreen({ navigation, route }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callId]);
 
-  const joinIfPossible = async () => {
-    if (joinedRef.current) return;
-    joinedRef.current = true;
-
-    const pc = createPeerConnection({
-      onIceCandidate: async (cand) => {
-        try {
-          await addCandidate(callId, role, cand);
-        } catch (e) {
-          console.log('Add candidate error', e);
-        }
-      },
-      onRemoteStream: (s) => setRemoteStreamState(s),
-    });
-    pcRef.current = pc;
-
-    const stream = await getLocalStream(mode);
-    setLocalStreamState(stream);
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
-
-    await startInCallAudio({ video: isVideo });
-
-    if (role === 'caller') {
-      // Create offer now
-      const offerDesc = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: isVideo });
-      const local = await setLocalDescription(pc, offerDesc);
-      await attachOffer(callId, local);
-    } else {
-      // Callee waits for offer, then answers
-      const tryAnswer = async () => {
-        const c = call;
-        if (!c?.offer) return false;
-        await setRemoteDescription(pc, c.offer);
-        const answerDesc = await pc.createAnswer();
-        const local = await setLocalDescription(pc, answerDesc);
-        await attachAnswer(callId, local);
-        return true;
-      };
-
-      // If offer isn't in state yet, we'll respond when `call` updates
-      if (!(await tryAnswer())) {
-        // no-op; effect below will handle once offer arrives
-      }
-    }
-  };
-
   useEffect(() => {
     const pc = pcRef.current;
     if (!pc || role !== 'callee') return;
     if (!call?.offer) return;
     if (call?.answer) return;
+    if (calleeAnswerSentRef.current) return;
+
     (async () => {
       try {
         await setRemoteDescription(pc, call.offer);
+        remoteIceGateRef.current = true;
+        await flushIceQueue();
+
         const answerDesc = await pc.createAnswer();
         const local = await setLocalDescription(pc, answerDesc);
+        calleeAnswerSentRef.current = true;
         await attachAnswer(callId, local);
       } catch (e) {
         console.log('Answer flow error', e);
+        calleeAnswerSentRef.current = false;
       }
     })();
-  }, [call?.offer, call?.answer, callId, role]);
+  }, [call?.offer, call?.answer, callId, role, flushIceQueue]);
 
   useEffect(() => {
     const pc = pcRef.current;
     if (!pc || role !== 'caller') return;
     if (!call?.answer) return;
+    if (callerRemoteAnswerAppliedRef.current) return;
+
     (async () => {
       try {
         await setRemoteDescription(pc, call.answer);
+        remoteIceGateRef.current = true;
+        callerRemoteAnswerAppliedRef.current = true;
+        await flushIceQueue();
       } catch (e) {
         console.log('Set remote answer error', e);
+        callerRemoteAnswerAppliedRef.current = false;
       }
     })();
-  }, [call?.answer, callId, role]);
+  }, [call?.answer, callId, role, flushIceQueue]);
 
-  const cleanup = async () => {
-    if (teardownRef.current) return;
-    teardownRef.current = true;
-    try {
-      if (pcRef.current) {
-        try {
-          pcRef.current.ontrack = null;
-          pcRef.current.onicecandidate = null;
-          pcRef.current.close();
-        } catch (e) {}
-        pcRef.current = null;
-      }
-      if (localStream) stopStream(localStream);
-      if (remoteStream) stopStream(remoteStream);
-      await stopInCallAudio();
-    } catch (e) {}
-  };
+  /** Remote party ended / declined / missed — tear down and leave for both sides. */
+  useEffect(() => {
+    const st = call?.status;
+    if (!st || (st !== 'ended' && st !== 'declined' && st !== 'missed')) return;
+    const t = setTimeout(() => {
+      leaveCall();
+    }, 400);
+    return () => clearTimeout(t);
+  }, [call?.status, leaveCall]);
 
   const hangup = async () => {
     try {
       await setCallStatus(callId, 'ended');
     } catch (e) {}
-    await cleanup();
-    navigation.goBack();
+    await leaveCall();
   };
 
   const toggleMute = () => {
     const next = !muted;
     setMutedState(next);
-    setMuted(localStream, next);
+    setMuted(localStreamRef.current, next);
   };
 
   const toggleCamera = () => {
     if (!isVideo) return;
     const next = !camOn;
     setCamOn(next);
-    setCameraEnabled(localStream, next);
+    setCameraEnabled(localStreamRef.current, next);
   };
 
   const flipCamera = async () => {
     if (!isVideo) return;
-    await switchCamera(localStream);
+    await switchCamera(localStreamRef.current);
   };
 
   const peerName =
-    role === 'caller'
-      ? call?.calleeName || 'User'
-      : call?.callerName || 'Professional';
+    role === 'caller' ? call?.calleeName || 'User' : call?.callerName || 'Professional';
+
+  const badgeText =
+    status === 'ringing'
+      ? 'Ringing…'
+      : status === 'connecting'
+        ? 'Connecting…'
+        : status === 'connected'
+          ? 'Connected'
+          : status === 'ended'
+            ? 'Call ended'
+            : status === 'declined'
+              ? 'Declined'
+              : status === 'missed'
+                ? 'Missed'
+                : status;
 
   return (
     <View style={styles.root}>
       <View style={styles.header}>
         <Text style={styles.title}>{title}</Text>
         <Text style={styles.sub}>{peerName}</Text>
-        <Text style={styles.badge}>
-          {status === 'ringing' ? 'Ringing…' : status === 'connecting' ? 'Connecting…' : status === 'connected' ? 'Connected' : status}
-        </Text>
+        <Text style={styles.badge}>{badgeText}</Text>
       </View>
 
       {isVideo ? (
@@ -339,4 +415,3 @@ const styles = StyleSheet.create({
   },
   hangupText: { color: '#fff', fontWeight: '900', fontSize: 12 },
 });
-

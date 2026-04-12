@@ -9,6 +9,138 @@ const KEYS = {
   RISK_HISTORY: 'risk_history',
   MONITORING_START_TS: 'monitoring_start_ts',
   APP_INSTALL_TIME_MS: 'app_install_time_ms',
+  DEMO_ACTIVE: 'mindguard_demo_active',
+  DEMO_TODAY_STATS: 'mindguard_demo_today_stats',
+};
+
+/** Local calendar YYYY-MM-DD (matches UsageMonitor start-of-day key). */
+const formatLocalYmd = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const calendarDayType = (d = new Date()) => {
+  const day = d.getDay();
+  return day === 0 || day === 6 ? 'weekend' : 'weekday';
+};
+
+const mkDemoAppRow = (packageName, appLabel, minutes, launches, isGame = false) => ({
+  packageName,
+  appLabel,
+  minutes,
+  ms: minutes * 60000,
+  launches,
+  isGame,
+});
+
+/**
+ * Rich “today” snapshot for presentation mode (same shape as getUsageStats()).
+ */
+const buildPresentationDemoTodayStats = () => {
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const dayType = calendarDayType(now);
+
+  const screenTimeApps = [
+    mkDemoAppRow('com.instagram.android', 'Instagram', 128, 44),
+    mkDemoAppRow('com.google.android.youtube', 'YouTube', 96, 21),
+    mkDemoAppRow('com.whatsapp', 'WhatsApp', 72, 31),
+    mkDemoAppRow('com.android.chrome', 'Chrome', 58, 36),
+    mkDemoAppRow('com.zhiliaoapp.musically', 'TikTok', 52, 17),
+    mkDemoAppRow('com.facebook.katana', 'Facebook', 41, 14),
+    mkDemoAppRow('com.netflix.mediaclient', 'Netflix', 34, 5),
+    mkDemoAppRow('com.spotify.music', 'Spotify', 22, 7),
+    mkDemoAppRow('com.google.android.gm', 'Gmail', 18, 12),
+    mkDemoAppRow('com.google.android.apps.messaging', 'Messages', 11, 9),
+  ];
+
+  const socialAppsBreakdown = [
+    mkDemoAppRow('com.instagram.android', 'Instagram', 128, 44),
+    mkDemoAppRow('com.google.android.youtube', 'YouTube', 96, 21),
+    mkDemoAppRow('com.whatsapp', 'WhatsApp', 72, 31),
+    mkDemoAppRow('com.zhiliaoapp.musically', 'TikTok', 52, 17),
+    mkDemoAppRow('com.facebook.katana', 'Facebook', 41, 14),
+  ];
+
+  const communicationAppsBreakdown = [
+    mkDemoAppRow('com.whatsapp', 'WhatsApp', 72, 31),
+    mkDemoAppRow('com.google.android.gm', 'Gmail', 18, 12),
+    mkDemoAppRow('com.google.android.apps.messaging', 'Messages', 11, 9),
+  ];
+
+  const entertainmentAppsBreakdown = [
+    mkDemoAppRow('com.google.android.youtube', 'YouTube', 96, 21),
+    mkDemoAppRow('com.android.chrome', 'Chrome', 58, 36),
+    mkDemoAppRow('com.netflix.mediaclient', 'Netflix', 34, 5),
+    mkDemoAppRow('com.spotify.music', 'Spotify', 22, 7),
+    mkDemoAppRow('com.zhiliaoapp.musically', 'TikTok', 52, 17),
+  ];
+
+  const nightApps = [
+    mkDemoAppRow('com.instagram.android', 'Instagram', 38, 6),
+    mkDemoAppRow('com.zhiliaoapp.musically', 'TikTok', 24, 5),
+    mkDemoAppRow('com.android.chrome', 'Chrome', 14, 4),
+  ];
+
+  const launchesByApp = [...screenTimeApps].sort((a, b) => b.launches - a.launches);
+
+  const locationPlaces = [
+    {
+      id: 'demo-home',
+      title: 'Home',
+      sampleCount: 8,
+      coordsLine: 'approx. 12.97° N, 77.59° E',
+    },
+    {
+      id: 'demo-work',
+      title: 'Work / campus',
+      sampleCount: 5,
+      coordsLine: 'approx. 12.93° N, 77.62° E',
+    },
+    {
+      id: 'demo-cafe',
+      title: 'Café',
+      sampleCount: 2,
+      coordsLine: 'approx. 12.95° N, 77.60° E',
+    },
+  ];
+
+  const locationMeta = {
+    dayType,
+    pointsCollected: 15,
+    clusterRadiusM: 300,
+    segmentMinM: 100,
+    sampleIntervalMins: 15,
+  };
+
+  return {
+    date: formatLocalYmd(start),
+    totalScreenTime: 312,
+    socialAppTime: 198,
+    communicationTime: 55,
+    entertainmentTime: 165,
+    appVarietyCount: 14,
+    appLaunches: 186,
+    nightUsage: 72,
+    locationVariety: 3,
+    homeStayDuration: 0,
+    mobilityRadius: 14.2,
+    mobilityKm: 14.2,
+    dayType,
+    locationPlaces,
+    locationMeta,
+    pointsCollected: 15,
+    timestamp: now.getTime(),
+    screenTimeApps,
+    socialAppsBreakdown,
+    communicationAppsBreakdown,
+    entertainmentAppsBreakdown,
+    nightApps,
+    launchesByApp,
+  };
 };
 
 const getFirstInstallTimeMs = async () => {
@@ -188,44 +320,77 @@ const clearAllData = async () => {
   }
 };
 
-// Inject fake 7-day data to skip the learning curve
-const injectFakeBaseline = async () => {
+/**
+ * Writes a week of sample history (skips the 7-day learning gate) and enables a
+ * local-only “today” overlay for demos. Does not upload data.
+ */
+const injectPresentationDemoData = async () => {
   try {
     const fakeHistory = [];
     const now = new Date();
-    
-    // Generate 7 days of descending dummy history
-    for (let i = 7; i > 0; i--) {
-      const d = new Date(now);
-      d.setDate(d.getDate() - i);
+
+    for (let i = 7; i > 0; i -= 1) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
       const isWeekend = d.getDay() === 0 || d.getDay() === 6;
-      
+
       fakeHistory.push({
-        date: d.toISOString().split('T')[0],
-        totalScreenTime: isWeekend ? 320 : 210, // minutes
-        socialAppTime: isWeekend ? 180 : 90,
-        communicationTime: isWeekend ? 40 : 60,
-        entertainmentTime: isWeekend ? 100 : 60,
+        date: formatLocalYmd(d),
+        totalScreenTime: isWeekend ? 300 : 205,
+        socialAppTime: isWeekend ? 165 : 85,
+        communicationTime: isWeekend ? 45 : 58,
+        entertainmentTime: isWeekend ? 95 : 55,
         appVarietyCount: 12,
-        appLaunches: 80,
-        nightUsage: isWeekend ? 60 : 10,
+        appLaunches: 78,
+        nightUsage: isWeekend ? 55 : 12,
         locationVariety: 3,
         homeStayDuration: 0,
-        mobilityRadius: isWeekend ? 15.5 : 25.2,
+        mobilityRadius: isWeekend ? 14.2 : 22.5,
         dayType: isWeekend ? 'weekend' : 'weekday',
         timestamp: d.getTime(),
       });
     }
-    
+
     await AsyncStorage.setItem(KEYS.DAILY_USAGE, JSON.stringify(fakeHistory));
-    
+
     const { calculateBaseline } = require('../analysis/BehaviorAnalyzer');
     const bl = calculateBaseline(fakeHistory);
     await saveBaseline(bl);
-    
+
+    await AsyncStorage.setItem(KEYS.DEMO_TODAY_STATS, JSON.stringify(buildPresentationDemoTodayStats()));
+    await AsyncStorage.setItem(KEYS.DEMO_ACTIVE, '1');
+
     return true;
   } catch (error) {
-    console.log('Inject fake data error:', error);
+    console.log('Inject presentation demo error:', error);
+    return false;
+  }
+};
+
+const getPresentationDemoTodayStats = async () => {
+  try {
+    if ((await AsyncStorage.getItem(KEYS.DEMO_ACTIVE)) !== '1') return null;
+    const raw = await AsyncStorage.getItem(KEYS.DEMO_TODAY_STATS);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Removes demo overlay and stored usage aggregates (back to a clean slate on-device). */
+const clearPresentationDemoData = async () => {
+  try {
+    await AsyncStorage.multiRemove([
+      KEYS.DEMO_ACTIVE,
+      KEYS.DEMO_TODAY_STATS,
+      KEYS.DAILY_USAGE,
+      KEYS.BASELINE,
+      KEYS.RISK_HISTORY,
+    ]);
+    return true;
+  } catch (error) {
+    console.log('Clear presentation demo error:', error);
     return false;
   }
 };
@@ -242,5 +407,7 @@ export {
   saveRiskScore,
   getRiskHistory,
   clearAllData,
-  injectFakeBaseline,
+  injectPresentationDemoData,
+  getPresentationDemoTodayStats,
+  clearPresentationDemoData,
 };

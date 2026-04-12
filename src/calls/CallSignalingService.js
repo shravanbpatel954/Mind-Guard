@@ -68,10 +68,21 @@ export async function setCallStatus(callId, status, extra = {}) {
   await ref.set(patch, { merge: true });
 }
 
+/** Plain { type, sdp } for Firestore (avoids non-serializable class instances). */
+export function serializeSessionDescription(desc) {
+  if (!desc) return null;
+  const type = desc.type;
+  const sdp = desc.sdp;
+  if (!type || sdp == null) return null;
+  return { type, sdp };
+}
+
 export async function attachOffer(callId, offer) {
+  const plain = serializeSessionDescription(offer);
+  if (!plain) return;
   await callDocRef(callId).set(
     {
-      offer,
+      offer: plain,
       offerCreatedAt: firestore.FieldValue.serverTimestamp(),
     },
     { merge: true },
@@ -79,9 +90,11 @@ export async function attachOffer(callId, offer) {
 }
 
 export async function attachAnswer(callId, answer) {
+  const plain = serializeSessionDescription(answer);
+  if (!plain) return;
   await callDocRef(callId).set(
     {
-      answer,
+      answer: plain,
       answerCreatedAt: firestore.FieldValue.serverTimestamp(),
     },
     { merge: true },
@@ -96,10 +109,27 @@ export function calleeCandidatesRef(callId) {
   return callDocRef(callId).collection('calleeCandidates');
 }
 
+function serializeIceCandidate(candidate) {
+  if (!candidate) return null;
+  try {
+    if (typeof candidate.toJSON === 'function') return candidate.toJSON();
+  } catch (e) {
+    /* ignore */
+  }
+  return {
+    candidate: candidate.candidate,
+    sdpMid: candidate.sdpMid,
+    sdpMLineIndex: candidate.sdpMLineIndex,
+  };
+}
+
 export async function addCandidate(callId, side, candidate) {
   const col = side === 'caller' ? callerCandidatesRef(callId) : calleeCandidatesRef(callId);
+  const plain = serializeIceCandidate(candidate);
+  if (!plain || plain.candidate == null) return;
   await col.add({
-    candidate,
+    candidate: plain,
+    clientTs: Date.now(),
     createdAt: firestore.FieldValue.serverTimestamp(),
   });
 }
@@ -116,16 +146,27 @@ export function listenToCall(callId, onChange, onError) {
 
 export function listenToCandidates(callId, side, onCandidate, onError) {
   const col = side === 'caller' ? calleeCandidatesRef(callId) : callerCandidatesRef(callId);
-  return col.orderBy('createdAt', 'asc').onSnapshot(
-    (snap) => {
-      snap.docChanges().forEach((change) => {
-        if (change.type !== 'added') return;
-        const data = change.doc.data();
-        if (data?.candidate) onCandidate(data.candidate);
-      });
-    },
-    onError,
-  );
+  let initial = true;
+  return col
+    .orderBy('clientTs', 'asc')
+    .onSnapshot(
+      (snap) => {
+        if (initial) {
+          initial = false;
+          snap.docs.forEach((doc) => {
+            const data = doc.data();
+            if (data?.candidate) onCandidate(data.candidate);
+          });
+          return;
+        }
+        snap.docChanges().forEach((change) => {
+          if (change.type !== 'added') return;
+          const data = change.doc.data();
+          if (data?.candidate) onCandidate(data.candidate);
+        });
+      },
+      onError,
+    );
 }
 
 export async function markMissedIfExpired(callId) {

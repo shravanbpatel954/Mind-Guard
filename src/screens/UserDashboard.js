@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   Dimensions,
   Modal,
   FlatList,
+  AppState,
 } from 'react-native';
 import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
@@ -31,11 +32,21 @@ import {
   getDailyUsageHistory,
   saveBaseline,
   saveRiskScore,
+  getPresentationDemoTodayStats,
 } from '../storage/LocalDB';
 import DashboardHeader from '../components/DashboardHeader';
 import { setCallStatus } from '../calls/CallSignalingService';
 
 const { width } = Dimensions.get('window');
+
+/** Deepest focused route in the root stack (avoids popping an active Call when ML opens Chat). */
+function getFocusedRouteName(state) {
+  if (!state?.routes?.length) return undefined;
+  const route = state.routes[state.index];
+  if (!route) return undefined;
+  if (route.state) return getFocusedRouteName(route.state);
+  return route.name;
+}
 
 // ─────────────────────────────────────────────
 // HELPER: convert minutes to "Xh Ym" string
@@ -665,28 +676,8 @@ const UserDashboard = ({ navigation }) => {
   const [daysTracked, setDaysTracked] = useState(0);
   const [detailModal, setDetailModal] = useState(null);
   const [incomingCall, setIncomingCall] = useState(null);
-
-  useEffect(() => {
-    init();
-
-    const intervalMs = LOCATION_CHECK_INTERVAL_MINUTES * 60 * 1000;
-
-    const recordOnce = async () => {
-      try {
-        await recordLocationSnapshot();
-      } catch (e) {
-        console.log('Location record error:', e);
-      }
-    };
-
-    recordOnce();
-
-    const locationInterval = setInterval(() => {
-      recordOnce();
-    }, intervalMs);
-
-    return () => clearInterval(locationInterval);
-  }, [init]);
+  /** Tracks last risk level we already surfaced to the user (popup + CalmBot). */
+  const lastUserRiskPopupRef = useRef(null);
 
   useEffect(() => {
     const uid = auth().currentUser?.uid;
@@ -715,14 +706,16 @@ const UserDashboard = ({ navigation }) => {
 
   const acceptIncomingCall = async () => {
     if (!incomingCall?.id) return;
+    const id = incomingCall.id;
+    const mode = incomingCall.mode || 'voice';
     try {
-      await setCallStatus(incomingCall.id, 'accepted');
+      await setCallStatus(id, 'accepted');
       setIncomingCall(null);
-      navigation.navigate('Call', {
-        callId: incomingCall.id,
-        role: 'callee',
-        mode: incomingCall.mode || 'voice',
-      });
+      if (navigation.push) {
+        navigation.push('Call', { callId: id, role: 'callee', mode });
+      } else {
+        navigation.navigate('Call', { callId: id, role: 'callee', mode });
+      }
     } catch (e) {
       Alert.alert('Error', 'Could not accept call. Please try again.');
     }
@@ -739,8 +732,10 @@ const UserDashboard = ({ navigation }) => {
   };
 
   const loadAndAnalyze = useCallback(async () => {
-    const stats = await getUsageStats();
-    if (!stats) return;
+    const demoToday = await getPresentationDemoTodayStats();
+    let stats = await getUsageStats();
+    if (demoToday) stats = demoToday;
+    else if (!stats) return;
 
     setTodayStats(stats);
 
@@ -799,7 +794,7 @@ const UserDashboard = ({ navigation }) => {
       }
     }
 
-    // 7. Save risk record
+    // 7. Save risk record (same in presentation demo mode for end-to-end testing)
     try {
       await saveRiskScore({
         date: stats.date,
@@ -808,15 +803,54 @@ const UserDashboard = ({ navigation }) => {
       });
     } catch (e) { }
 
-    // 8. If HIGH risk → go to intervention (deferred so the dashboard can finish mounting)
-    if (result.riskLevel === 'HIGH' && navigation) {
-      setTimeout(() => {
-        try {
-          navigation.navigate('Chat');
-        } catch (e) {
-          console.log('Navigate to Chat skipped:', e);
+    // 8. ML risk → CalmBot: HIGH always opens Chat (same as original app); ref only throttles the extra Alert.
+    const rl = String(result.riskLevel || 'NORMAL').toUpperCase();
+    if (rl === 'NORMAL') {
+      lastUserRiskPopupRef.current = 'NORMAL';
+    } else if (navigation) {
+      if (rl === 'HIGH') {
+        setTimeout(() => {
+          if (getFocusedRouteName(navigation.getState?.()) === 'Call') {
+            return;
+          }
+          try {
+            navigation.navigate('Chat', { riskLevel: 'HIGH' });
+          } catch (e) {
+            console.log('Navigate to Chat skipped:', e);
+          }
+          if (lastUserRiskPopupRef.current !== 'HIGH') {
+            lastUserRiskPopupRef.current = 'HIGH';
+            Alert.alert(
+              'MindGuard',
+              'Your patterns today look notably different from usual. CalmBot is opening for a private check-in.',
+              [{ text: 'OK' }],
+            );
+          }
+        }, 0);
+      } else if (rl === 'MODERATE') {
+        const p = lastUserRiskPopupRef.current;
+        if (p === 'NORMAL' || p === null) {
+          lastUserRiskPopupRef.current = 'MODERATE';
+          Alert.alert(
+            'MindGuard',
+            'Some shifts showed up in today’s patterns. You can open CalmBot for a gentle check-in.',
+            [
+              {
+                text: 'Open CalmBot',
+                onPress: () => {
+                  try {
+                    if (getFocusedRouteName(navigation.getState?.()) === 'Call') return;
+                    navigation.navigate('Chat', { riskLevel: 'MODERATE' });
+                  } catch (e) {
+                    console.log('Navigate to Chat skipped:', e);
+                  }
+                },
+              },
+              { text: 'Later', style: 'cancel' },
+            ],
+          );
         }
-      }, 0);
+      }
     }
   }, [navigation]);
 
@@ -841,6 +875,45 @@ const UserDashboard = ({ navigation }) => {
       setLoading(false);
     }
   }, [loadAndAnalyze]);
+
+  useEffect(() => {
+    init();
+
+    const intervalMs = LOCATION_CHECK_INTERVAL_MINUTES * 60 * 1000;
+
+    const recordOnce = async () => {
+      try {
+        await recordLocationSnapshot();
+      } catch (e) {
+        console.log('Location record error:', e);
+      }
+    };
+
+    recordOnce();
+
+    const locationInterval = setInterval(() => {
+      recordOnce();
+    }, intervalMs);
+
+    return () => clearInterval(locationInterval);
+  }, [init]);
+
+  useEffect(() => {
+    if (!hasPermission || loading) return undefined;
+    const id = setInterval(() => {
+      loadAndAnalyze();
+    }, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [hasPermission, loading, loadAndAnalyze]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active' && hasPermission) {
+        loadAndAnalyze();
+      }
+    });
+    return () => sub.remove();
+  }, [hasPermission, loadAndAnalyze]);
 
   // ── RENDER ──
   if (loading) {

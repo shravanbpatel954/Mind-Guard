@@ -130,6 +130,7 @@ export function buildCrisisFollowup(userAnswerRaw) {
   if (isYes) {
     return {
       severity: 'high',
+      escalateToGuardian: true,
       message:
         "Thank you for telling me. You deserve real support right now.\n\n" +
         "If you can, please contact your local emergency number right now. If you’re not alone, tell someone nearby what’s happening.\n\n" +
@@ -140,6 +141,7 @@ export function buildCrisisFollowup(userAnswerRaw) {
   if (isNo) {
     return {
       severity: 'moderate',
+      escalateToGuardian: false,
       message:
         "Thank you — I’m relieved you’re not in immediate danger.\n\n" +
         "Even so, you don’t have to handle this alone. Would you like to message/call a trusted person now, or would you like a short plan for getting through the next hour safely?",
@@ -147,7 +149,8 @@ export function buildCrisisFollowup(userAnswerRaw) {
   }
 
   return {
-    severity: 'high',
+    severity: 'moderate',
+    escalateToGuardian: false,
     message:
       "Thanks — I want to make sure I understand.\n\n" +
       "Are you in immediate danger right now? You can reply with “yes” or “no”.",

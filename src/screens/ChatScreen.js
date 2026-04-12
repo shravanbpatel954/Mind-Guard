@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
-import { sendHelpRequestAlert } from '../alerts/AlertManager';
+import { sendCalmBotGuardianAlert } from '../alerts/AlertManager';
 import { startLiveLocationSharing } from '../monitoring/LiveLocationSharing';
 import {
   buildCrisisFollowup,
@@ -35,9 +35,27 @@ export default function ChatScreen({ navigation, route }) {
   const [botSuspended, setBotSuspended]   = useState(false);
   const botStateRef = useRef('normal'); // normal | supportive | crisis_check
   const scrollRef = useRef(null);
+  /** Firestore can emit multiple empty snapshots; seed the greeting only once. */
+  const greetingSeededRef = useRef(false);
+
+  const saveMessage = useCallback(async (role, content, authorId = 'user') => {
+    if (!uid) return;
+    await firestore().collection('chat_sessions').doc(uid).collection('messages').add({
+      role,
+      content,
+      authorId,
+      createdAt: firestore.FieldValue.serverTimestamp(),
+    });
+
+    await firestore().collection('chat_sessions').doc(uid).set({
+      lastMessageAt: firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }, [uid]);
 
   useEffect(() => {
     if (!uid) return;
+
+    greetingSeededRef.current = false;
 
     const sessionRef = firestore().collection('chat_sessions').doc(uid);
     sessionRef.set({
@@ -54,22 +72,27 @@ export default function ChatScreen({ navigation, route }) {
       }
     });
 
-    const unsubMessages = sessionRef.collection('messages')
+    const unsubMessages = sessionRef
+      .collection('messages')
       .orderBy('createdAt', 'asc')
-      .onSnapshot(snap => {
+      .onSnapshot((snap) => {
         if (!snap) return;
-        const msgs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const msgs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         setMessages(msgs);
-        
+
         if (msgs.length === 0) {
-          const greeting = riskLevel === 'HIGH'
-            ? "Hey, I noticed your patterns today looked a little different from usual 🌿\n\nI'm CalmBot — I'm here to check in, not to judge. You don't have to share anything you're not comfortable with.\n\nHow are you feeling right now?"
-            : "Hey! 👋 I'm CalmBot, your wellness companion.\n\nI'm here whenever you want to talk. How are you doing today?";
-          saveMessage('assistant', greeting, 'bot');
+          if (greetingSeededRef.current) return;
+          greetingSeededRef.current = true;
+          const greeting =
+            riskLevel === 'HIGH'
+              ? "Hey, I noticed your patterns today looked a little different from usual 🌿\n\nI'm CalmBot — I'm here to check in, not to judge. You don't have to share anything you're not comfortable with.\n\nHow are you feeling right now?"
+              : "Hey! 👋 I'm CalmBot, your wellness companion.\n\nI'm here whenever you want to talk. How are you doing today?";
+          saveMessage('assistant', greeting, 'bot').catch((e) => console.log('CalmBot greeting save error:', e));
         } else {
-           if (msgs[msgs.length - 1].role === 'assistant') {
-             setLoading(false);
-           }
+          greetingSeededRef.current = false;
+          if (msgs[msgs.length - 1].role === 'assistant') {
+            setLoading(false);
+          }
         }
       });
 
@@ -83,34 +106,21 @@ export default function ChatScreen({ navigation, route }) {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 150);
   }, [messages, loading]);
 
-  const saveMessage = useCallback(async (role, content, authorId = 'user') => {
-    if (!uid) return;
-    await firestore().collection('chat_sessions').doc(uid).collection('messages').add({
-      role,
-      content,
-      authorId,
-      createdAt: firestore.FieldValue.serverTimestamp(),
-    });
-    
-    await firestore().collection('chat_sessions').doc(uid).set({
-      lastMessageAt: firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-  }, [uid]);
-
-  const escalateSession = async () => {
-    if (!uid) return;
+  const escalateSession = async (kind, userPreview = '') => {
+    if (!uid || !kind) return;
     await firestore().collection('chat_sessions').doc(uid).set({
       status: 'guardian_notified',
       botSuspended: false, // Ensure bot continues to interact with user
       escalatedAt: firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
-    sendHelpRequestAlert()
-      .then(info => {
-        if (info?.alertId) {
-          startLiveLocationSharing(info.alertId, info.expiresAtMs);
-        }
-      })
-      .catch(e => console.log('Guardian alert failed', e));
+    try {
+      const info = await sendCalmBotGuardianAlert({ kind, userMessagePreview: userPreview });
+      if (info?.alertId) {
+        startLiveLocationSharing(info.alertId, info.expiresAtMs);
+      }
+    } catch (e) {
+      console.log('Guardian alert failed', e);
+    }
   };
 
   const sendMessage = async (text) => {
@@ -128,7 +138,10 @@ export default function ChatScreen({ navigation, route }) {
     botStateRef.current = nextState;
 
     const needsEscalation = classification.intent === 'self_harm' || classification.intent === 'help';
-    if (needsEscalation) await escalateSession();
+    if (needsEscalation) {
+      const kind = classification.intent === 'self_harm' ? 'SELF_HARM' : 'HELP';
+      await escalateSession(kind, text.trim());
+    }
 
     setTimeout(async () => {
       if (botSuspended) {
@@ -140,8 +153,9 @@ export default function ChatScreen({ navigation, route }) {
         if (prevState === 'crisis_check') {
           const follow = buildCrisisFollowup(text);
           reply = follow.message;
-          // Escalate again just in case
-          try { await escalateSession(); } catch (e) {}
+          if (follow.escalateToGuardian) {
+            await escalateSession('CRISIS_CONFIRMED', text.trim());
+          }
           botStateRef.current = follow.severity === 'high' ? 'crisis_check' : 'supportive';
         }
         await saveMessage('assistant', reply, 'bot');

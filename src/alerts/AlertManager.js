@@ -79,9 +79,31 @@ export const sendRiskAlert = async (riskLevel, riskScore, deviations) => {
 
 /** User tapped for help in CalmBot — urgent alert to guardians. */
 export const sendHelpRequestAlert = async () => {
+  return sendCalmBotGuardianAlert({
+    kind: 'HELP',
+    userMessagePreview: 'User tapped “I need help” or equivalent in CalmBot.',
+  });
+};
+
+/**
+ * Immediate guardian notification from CalmBot crisis signals.
+ * Not deduped by day — each serious signal creates a new alert so linked guardians
+ * see it in real time over their existing Firestore listener.
+ *
+ * @param {'SELF_HARM'|'HELP'|'CRISIS_CONFIRMED'} kind
+ */
+export const sendCalmBotGuardianAlert = async ({ kind, userMessagePreview = '' }) => {
   try {
     const uid = auth().currentUser?.uid;
-    if (!uid) return;
+    if (!uid) return null;
+
+    const typeMap = {
+      SELF_HARM: 'CALMBOT_SELF_HARM',
+      HELP: 'USER_REQUESTED_HELP',
+      CRISIS_CONFIRMED: 'CALMBOT_CRISIS_CONFIRMED',
+    };
+    const type = typeMap[kind];
+    if (!type) return null;
 
     const userDoc = await firestore().collection('users').doc(uid).get();
     const userName = userDoc.data()?.name || 'Unknown';
@@ -94,6 +116,20 @@ export const sendHelpRequestAlert = async () => {
 
     const guardianIds = linksSnap.docs.map((d) => d.data().guardianId).filter(Boolean);
 
+    let message = '';
+    if (kind === 'SELF_HARM') {
+      message = 'CalmBot detected self-harm related language in chat.';
+    } else if (kind === 'HELP') {
+      message = 'The user asked for urgent help in CalmBot.';
+    } else if (kind === 'CRISIS_CONFIRMED') {
+      message =
+        'The user indicated possible immediate danger during a CalmBot safety check-in. Please reach out now.';
+    }
+    const preview = String(userMessagePreview || '').trim();
+    if (preview) {
+      message = `${message} Context (trimmed): “${preview.slice(0, 160)}${preview.length > 160 ? '…' : ''}”`;
+    }
+
     const createdAt = new Date();
     const expiresAtMs = createdAt.getTime() + 12 * 60 * 60 * 1000;
 
@@ -101,20 +137,23 @@ export const sendHelpRequestAlert = async () => {
       userId: uid,
       userName,
       guardianIds,
-      type: 'USER_REQUESTED_HELP',
+      type,
       riskLevel: 'HIGH',
       riskScore: 100,
       deviations: [],
       date: new Date().toISOString().split('T')[0],
-      message: 'User manually reached out for help through CalmBot.',
+      message,
       timestamp: firestore.FieldValue.serverTimestamp(),
       read: false,
+      liveLocationActive: false,
+      liveLocationExpiresAt: new Date(expiresAtMs),
+      calmbotKind: kind,
     });
 
-    console.log('Help request alert sent');
+    console.log(`CalmBot guardian alert sent: ${type}`);
     return { alertId: docRef.id, expiresAtMs };
   } catch (error) {
-    console.log('Help request alert error:', error);
+    console.log('CalmBot guardian alert error:', error);
     throw error;
   }
 };

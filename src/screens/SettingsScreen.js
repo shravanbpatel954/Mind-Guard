@@ -17,6 +17,7 @@ import {
 import { Camera, useCameraDevice, useCodeScanner } from 'react-native-vision-camera';
 import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
+import { injectPresentationDemoData, clearPresentationDemoData } from '../storage/LocalDB';
 import { ThemeMode } from '../theme/tokens';
 import { useTheme } from '../theme/useTheme';
 import { normalizeMindGuardRole } from '../utils/mindguardProfile';
@@ -173,6 +174,7 @@ export default function SettingsScreen({ navigation }) {
   const [linkedUsers, setLinkedUsers] = useState([]);
   const [linkedUsersBusy, setLinkedUsersBusy] = useState(false);
   const [revokeBusy, setRevokeBusy] = useState(false);
+  const [demoBusy, setDemoBusy] = useState(false);
 
   const device = useCameraDevice('back');
   const codeScanner = useCodeScanner({
@@ -478,6 +480,59 @@ export default function SettingsScreen({ navigation }) {
     }
   };
 
+  const confirmInjectDemoData = () => {
+    Alert.alert(
+      'Load demo data?',
+      'Adds sample on-device history and a sample “today” so the full risk flow matches production: ML scoring, guardian alerts, live-location window, CalmBot, and local risk history. Linked guardians can receive real Firestore alerts—use a test account or warn them first. Raw app-usage breakdowns stay on the phone. Tap Clear when finished.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Load demo',
+          onPress: async () => {
+            setDemoBusy(true);
+            try {
+              const ok = await injectPresentationDemoData();
+              if (ok) {
+                Alert.alert(
+                  'Demo ready',
+                  'Open the MindGuard dashboard. If it was already open, tap Refresh data so the new snapshot appears.',
+                );
+              } else {
+                Alert.alert('Could not load demo', 'Please try again.');
+              }
+            } finally {
+              setDemoBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const confirmClearDemoData = () => {
+    Alert.alert(
+      'Clear demo data?',
+      'Removes the demo snapshot and clears stored usage history on this phone. Your account stays signed in.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: async () => {
+            setDemoBusy(true);
+            try {
+              const ok = await clearPresentationDemoData();
+              if (ok) Alert.alert('Cleared', 'Demo data was removed from this device.');
+              else Alert.alert('Error', 'Could not clear demo data. Please try again.');
+            } finally {
+              setDemoBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const confirmLogout = () => {
     Alert.alert(
       'Log out',
@@ -569,6 +624,29 @@ export default function SettingsScreen({ navigation }) {
           <Text style={[styles.primaryBtnText, { color: colors.primaryText }]}>Open system settings</Text>
         </TouchableOpacity>
       </View>
+
+      {role === 'user' && (
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={styles.cardLabel}>Presentation</Text>
+          <Text style={[styles.body, { color: colors.subtext }]}>
+            Full test mode: same risk pipeline as real data (guardian alerts, live location, CalmBot). Use a test account or tell guardians first. Requires usage access.
+          </Text>
+          <TouchableOpacity
+            style={[styles.primaryBtn, { backgroundColor: colors.primary }, demoBusy && styles.disabledBtn]}
+            onPress={confirmInjectDemoData}
+            disabled={demoBusy}>
+            <Text style={[styles.primaryBtnText, { color: colors.primaryText }]}>
+              {demoBusy ? 'Please wait…' : 'Load demo data'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.secondaryBtn, styles.demoClearBtn, demoBusy && styles.disabledBtn]}
+            onPress={confirmClearDemoData}
+            disabled={demoBusy}>
+            <Text style={styles.secondaryBtnText}>Clear demo data</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {role === 'user' && (
         <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -832,6 +910,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 12,
   },
+  demoClearBtn: { flex: 0, alignSelf: 'stretch', marginTop: 10 },
   secondaryBtnText: { color: '#6366f1', fontSize: 14, fontWeight: '700' },
   primaryBtnSmall: {
     width: 100,

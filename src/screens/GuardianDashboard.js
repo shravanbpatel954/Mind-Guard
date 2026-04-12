@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -12,11 +12,20 @@ import {
   SafeAreaView,
   TextInput,
   Linking,
+  Vibration,
+  Platform,
 } from 'react-native';
 import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
 import DashboardHeader from '../components/DashboardHeader';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+
+const LIVE_MAP_DEFAULT_REGION = {
+  latitude: 20.5937,
+  longitude: 78.9629,
+  latitudeDelta: 30,
+  longitudeDelta: 30,
+};
 
 function GhostChatModal({ targetUserId, targetUserName, onClose }) {
   const [messages, setMessages] = useState([]);
@@ -143,6 +152,33 @@ function LiveLocationModal({ alert, visible, onClose }) {
     };
   }, [visible, alert?.id]);
 
+  const coordsAsc = useMemo(
+    () =>
+      [...points]
+        .reverse()
+        .filter((p) => typeof p.lat === 'number' && typeof p.lon === 'number')
+        .map((p) => ({ latitude: p.lat, longitude: p.lon })),
+    [points],
+  );
+
+  const lastCoord = coordsAsc.length > 0 ? coordsAsc[coordsAsc.length - 1] : null;
+
+  const [mapRegion, setMapRegion] = useState(LIVE_MAP_DEFAULT_REGION);
+
+  useEffect(() => {
+    if (!visible) return;
+    if (lastCoord) {
+      setMapRegion({
+        latitude: lastCoord.latitude,
+        longitude: lastCoord.longitude,
+        latitudeDelta: 0.06,
+        longitudeDelta: 0.06,
+      });
+    } else {
+      setMapRegion(LIVE_MAP_DEFAULT_REGION);
+    }
+  }, [visible, lastCoord]);
+
   if (!visible || !alert) return null;
 
   const formatTs = (ts) => {
@@ -160,16 +196,6 @@ function LiveLocationModal({ alert, visible, onClose }) {
 
   const now = new Date();
   const isExpired = expiresAt && now > expiresAt;
-
-  const coordsAsc = [...points]
-    .reverse()
-    .filter((p) => typeof p.lat === 'number' && typeof p.lon === 'number')
-    .map((p) => ({ latitude: p.lat, longitude: p.lon }));
-
-  const lastCoord = coordsAsc.length > 0 ? coordsAsc[coordsAsc.length - 1] : null;
-  const initialRegion = lastCoord
-    ? { ...lastCoord, latitudeDelta: 0.01, longitudeDelta: 0.01 }
-    : { latitude: 20.5937, longitude: 78.9629, latitudeDelta: 30, longitudeDelta: 30 };
 
   const openInMaps = async () => {
     if (!lastCoord) return;
@@ -217,12 +243,18 @@ function LiveLocationModal({ alert, visible, onClose }) {
             </Text>
           ) : (
             <>
-              <View style={styles.liveMapWrap}>
-                <MapView style={styles.liveMap} initialRegion={initialRegion}>
+              <View style={styles.liveMapWrap} collapsable={false}>
+                <MapView
+                  style={StyleSheet.absoluteFillObject}
+                  provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+                  initialRegion={mapRegion}
+                  region={mapRegion}
+                  mapType="standard"
+                  rotateEnabled={false}>
                   {coordsAsc.length > 1 && (
                     <Polyline coordinates={coordsAsc} strokeWidth={4} strokeColor="#2563eb" />
                   )}
-                  {lastCoord && <Marker coordinate={lastCoord} title="Live location" />}
+                  {lastCoord ? <Marker coordinate={lastCoord} title="Live location" /> : null}
                 </MapView>
                 <View style={styles.liveMapTopRow}>
                   <View style={styles.livePill}>
@@ -272,6 +304,7 @@ export default function GuardianDashboard({ navigation }) {
   const [liveAlert, setLiveAlert] = useState(null);
   const listenerRef = useRef(null);
   const chatSessionsListenerRefs = useRef([]);
+  const alertsPrimedRef = useRef(false);
 
   const loadProfile = useCallback(async () => {
     try {
@@ -287,6 +320,7 @@ export default function GuardianDashboard({ navigation }) {
   /** Alerts where this guardian is listed — scales past Firestore `in` limit of 10. */
   const startAlertsListener = useCallback((guardianUid) => {
     if (listenerRef.current) listenerRef.current();
+    alertsPrimedRef.current = false;
 
     // Avoid composite-index requirement by not ordering in the query.
     // We'll sort client-side by timestamp.
@@ -303,6 +337,38 @@ export default function GuardianDashboard({ navigation }) {
           const bt = b.timestamp?.toMillis ? b.timestamp.toMillis() : b.timestamp?.seconds ? b.timestamp.seconds * 1000 : 0;
           return bt - at;
         });
+
+        const urgentTypes = new Set([
+          'USER_REQUESTED_HELP',
+          'CALMBOT_SELF_HARM',
+          'CALMBOT_CRISIS_CONFIRMED',
+          'HIGH_RISK',
+          'MODERATE_RISK',
+        ]);
+
+        if (alertsPrimedRef.current) {
+          snap.docChanges().forEach((ch) => {
+            if (ch.type !== 'added' || !ch.doc.exists) return;
+            const a = { id: ch.doc.id, ...ch.doc.data() };
+            if (a.read) return;
+            if (!urgentTypes.has(a.type)) return;
+            const headline =
+              a.type === 'HIGH_RISK' || a.type === 'MODERATE_RISK'
+                ? 'Risk update'
+                : 'Urgent · CalmBot';
+            try {
+              Vibration.vibrate([0, 260, 140, 260]);
+            } catch (e) {
+              /* ignore */
+            }
+            Alert.alert(`${headline} — ${a.userName || 'Linked user'}`, a.message || 'Open MindGuard for details.', [
+              { text: 'OK' },
+            ]);
+          });
+        } else {
+          alertsPrimedRef.current = true;
+        }
+
         setAlerts(alertList);
       },
       (error) => console.log('Alerts listener error:', error)
@@ -431,6 +497,22 @@ export default function GuardianDashboard({ navigation }) {
           color: '#dc2626',
           bg: '#fff1f2',
           border: '#fecdd3',
+        };
+      case 'CALMBOT_SELF_HARM':
+        return {
+          emoji: '⚠️',
+          label: 'CalmBot · self-harm language',
+          color: '#b91c1c',
+          bg: '#fef2f2',
+          border: '#fecaca',
+        };
+      case 'CALMBOT_CRISIS_CONFIRMED':
+        return {
+          emoji: '🚨',
+          label: 'CalmBot · immediate danger indicated',
+          color: '#991b1b',
+          bg: '#fef2f2',
+          border: '#fca5a5',
         };
       default:
         return {
@@ -671,11 +753,11 @@ export default function GuardianDashboard({ navigation }) {
             },
             {
               emoji: '🔔',
-              text: 'MODERATE or HIGH risk creates an alert here in real time (once per level per day).',
+              text: 'MODERATE or HIGH risk creates an alert here in real time (once per level per day). You get a pop-up while the app is open.',
             },
             {
               emoji: '🆘',
-              text: 'If they tap for help in CalmBot, you get an emergency alert immediately.',
+              text: 'If CalmBot detects crisis language, a help request, or a “yes” to immediate danger, you get a new urgent alert immediately (no refresh).',
             },
             {
               emoji: '🔒',
@@ -923,8 +1005,8 @@ const styles = StyleSheet.create({
     marginTop: 10,
     borderWidth: 1,
     borderColor: '#e2e8f0',
+    backgroundColor: '#e2e8f0',
   },
-  liveMap: { flex: 1 },
   liveMapTopRow: {
     position: 'absolute',
     top: 10,
