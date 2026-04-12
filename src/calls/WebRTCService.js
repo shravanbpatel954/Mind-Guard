@@ -1,4 +1,3 @@
-import { Platform } from 'react-native';
 import {
   RTCPeerConnection,
   RTCIceCandidate,
@@ -56,18 +55,25 @@ export function createPeerConnection({ onIceCandidate, onRemoteStream }) {
   return pc;
 }
 
-export async function startInCallAudio({ video }) {
+/** Route playback: true = speakerphone, false = earpiece (voice-call default). */
+export function applyCallSpeakerRoute(speakerOn) {
+  const on = !!speakerOn;
+  try {
+    InCallManager.setForceSpeakerphoneOn(on);
+  } catch (e) {
+    console.log('setForceSpeakerphoneOn error', e);
+  }
+  try {
+    InCallManager.setSpeakerphoneOn(on);
+  } catch (e) {
+    /* optional on some builds */
+  }
+}
+
+export async function startInCallAudio({ video, speakerOn }) {
   try {
     InCallManager.start({ media: video ? 'video' : 'audio' });
-    // Many devices route WebRTC to earpiece when false — user hears nothing; speaker fixes voice calls.
-    InCallManager.setForceSpeakerphoneOn(true);
-    if (Platform.OS === 'ios' && !video) {
-      try {
-        InCallManager.setSpeakerphoneOn(true);
-      } catch (e) {
-        /* optional API */
-      }
-    }
+    applyCallSpeakerRoute(speakerOn);
   } catch (e) {
     console.log('InCallManager start error', e);
   }
@@ -119,10 +125,25 @@ export function setMuted(stream, muted) {
 }
 
 export function setCameraEnabled(stream, enabled) {
-  if (!stream) return;
-  stream.getVideoTracks().forEach((t) => {
-    t.enabled = !!enabled;
-  });
+  setOutgoingVideoEnabled(null, stream, enabled);
+}
+
+/** Mute outgoing video for the peer (stream + sender tracks). */
+export function setOutgoingVideoEnabled(pc, stream, enabled) {
+  const on = !!enabled;
+  if (stream) {
+    stream.getVideoTracks().forEach((t) => {
+      t.enabled = on;
+    });
+  }
+  if (pc && typeof pc.getSenders === 'function') {
+    pc.getSenders().forEach((sender) => {
+      const t = sender.track;
+      if (t && t.kind === 'video') {
+        t.enabled = on;
+      }
+    });
+  }
 }
 
 export async function switchCamera(stream) {

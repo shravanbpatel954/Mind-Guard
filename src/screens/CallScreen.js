@@ -12,11 +12,12 @@ import {
 } from '../calls/CallSignalingService';
 import {
   addIceCandidate,
+  applyCallSpeakerRoute,
   createPeerConnection,
   getLocalStream,
-  setCameraEnabled,
   setLocalDescription,
   setMuted,
+  setOutgoingVideoEnabled,
   setRemoteDescription,
   startInCallAudio,
   stopInCallAudio,
@@ -35,6 +36,8 @@ export default function CallScreen({ navigation, route }) {
   const [remoteStream, setRemoteStreamState] = useState(null);
   const [muted, setMutedState] = useState(false);
   const [camOn, setCamOn] = useState(mode === 'video');
+  /** WhatsApp-like: video defaults to speaker; voice to earpiece. */
+  const [speakerOn, setSpeakerOn] = useState(() => mode === 'video');
 
   const pcRef = useRef(null);
   const joinedRef = useRef(false);
@@ -152,7 +155,7 @@ export default function CallScreen({ navigation, route }) {
       setLocalStreamState(stream);
       stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
-      await startInCallAudio({ video: isVideo });
+      await startInCallAudio({ video: isVideo, speakerOn: mode === 'video' });
 
       if (role === 'caller') {
         const offerDesc = await pc.createOffer({
@@ -282,7 +285,13 @@ export default function CallScreen({ navigation, route }) {
     if (!isVideo) return;
     const next = !camOn;
     setCamOn(next);
-    setCameraEnabled(localStreamRef.current, next);
+    setOutgoingVideoEnabled(pcRef.current, localStreamRef.current, next);
+  };
+
+  const toggleSpeaker = () => {
+    const next = !speakerOn;
+    setSpeakerOn(next);
+    applyCallSpeakerRoute(next);
   };
 
   const flipCamera = async () => {
@@ -317,12 +326,13 @@ export default function CallScreen({ navigation, route }) {
       </View>
 
       {isVideo ? (
-        <View style={styles.videoWrap}>
+        <View style={styles.videoWrap} collapsable={false}>
           {remoteStream ? (
             <RTCView
               style={styles.remoteVideo}
               streamURL={remoteStream.toURL()}
               objectFit="cover"
+              {...(Platform.OS === 'android' ? { zOrder: 0 } : {})}
             />
           ) : (
             <View style={styles.videoPlaceholder}>
@@ -330,14 +340,25 @@ export default function CallScreen({ navigation, route }) {
             </View>
           )}
 
-          {localStream ? (
-            <RTCView
-              style={styles.localVideo}
-              streamURL={localStream.toURL()}
-              objectFit="cover"
-              mirror={Platform.OS === 'ios'}
-            />
-          ) : null}
+          <View style={styles.localPip} pointerEvents="box-none">
+            {localStream && camOn ? (
+              <RTCView
+                style={styles.localRtc}
+                streamURL={localStream.toURL()}
+                objectFit="cover"
+                mirror={Platform.OS === 'ios'}
+                {...(Platform.OS === 'android' ? { zOrder: 1 } : {})}
+              />
+            ) : localStream ? (
+              <View style={[styles.localRtc, styles.localPipPlaceholder]}>
+                <Text style={styles.localPipOff}>Camera off</Text>
+              </View>
+            ) : (
+              <View style={[styles.localRtc, styles.localPipPlaceholder]}>
+                <Text style={styles.localPipOff}>Starting…</Text>
+              </View>
+            )}
+          </View>
         </View>
       ) : (
         <View style={styles.voiceWrap}>
@@ -349,6 +370,16 @@ export default function CallScreen({ navigation, route }) {
       <View style={styles.controls}>
         <TouchableOpacity style={[styles.ctrlBtn, muted && styles.ctrlBtnActive]} onPress={toggleMute}>
           <Text style={[styles.ctrlText, muted && styles.ctrlTextActive]}>{muted ? 'Unmute' : 'Mute'}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.ctrlBtn, speakerOn && styles.ctrlBtnActive]}
+          onPress={toggleSpeaker}
+          accessibilityLabel={speakerOn ? 'Speaker on' : 'Earpiece'}
+        >
+          <Text style={[styles.ctrlText, speakerOn && styles.ctrlTextActive]}>
+            {speakerOn ? 'Speaker' : 'Earpiece'}
+          </Text>
         </TouchableOpacity>
 
         {isVideo ? (
@@ -377,8 +408,24 @@ const styles = StyleSheet.create({
   sub: { color: '#cbd5e1', marginTop: 4, fontSize: 14 },
   badge: { color: '#93c5fd', marginTop: 6, fontSize: 12, fontWeight: '700' },
   videoWrap: { flex: 1, margin: 14, borderRadius: 18, overflow: 'hidden', backgroundColor: '#0f172a' },
-  remoteVideo: { flex: 1 },
-  localVideo: { position: 'absolute', right: 10, top: 10, width: 120, height: 160, borderRadius: 14, overflow: 'hidden' },
+  remoteVideo: { flex: 1, width: '100%', height: '100%' },
+  localPip: {
+    position: 'absolute',
+    right: 10,
+    top: 10,
+    width: 120,
+    height: 160,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: '#1e293b',
+    borderWidth: 2,
+    borderColor: '#334155',
+    zIndex: 20,
+    elevation: 20,
+  },
+  localRtc: { width: '100%', height: '100%' },
+  localPipPlaceholder: { justifyContent: 'center', alignItems: 'center' },
+  localPipOff: { color: '#94a3b8', fontWeight: '700', fontSize: 12, textAlign: 'center' },
   videoPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   videoPlaceholderText: { color: '#94a3b8', fontSize: 14 },
   voiceWrap: { flex: 1, justifyContent: 'center', alignItems: 'center' },
